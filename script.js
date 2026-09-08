@@ -2045,6 +2045,22 @@ const impactEffects = []; // transient { mesh, life, maxLife, expandTo }
 let selectionRing = null; // ring shown under the currently-selected placed tower
 let placement = { active: false, towerId: null, rotationY: 0, group: null, valid: false };
 
+// r128 has no THREE.CapsuleGeometry (that landed in r142+), so build a stand-in
+// out of a cylinder body + two hemisphere caps, grouped so it behaves like one mesh.
+function makeCapsuleGroup(radius, length, material) {
+    const group = new THREE.Group();
+    const cyl = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, 12, 1, true), material);
+    group.add(cyl);
+    const topCap = new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), material);
+    topCap.position.y = length / 2;
+    group.add(topCap);
+    const botCap = new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 8, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), material);
+    botCap.position.y = -length / 2;
+    group.add(botCap);
+    group.userData.bodyMaterial = material;
+    return group;
+}
+
 function makeCanvasTextSprite(text, opts = {}) {
     const size = opts.size || 128;
     const cnv = document.createElement("canvas");
@@ -2247,14 +2263,14 @@ function initThreeScene() {
 
     // Player rig: a small stylized capsule character
     const body = new THREE.Group();
-    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(7, 14, 4, 8), new THREE.MeshStandardMaterial({ color: "#3498db" }));
-    torso.position.y = 16; torso.castShadow = true;
+    const torso = makeCapsuleGroup(7, 14, new THREE.MeshStandardMaterial({ color: "#3498db" }));
+    torso.position.y = 16;
+    torso.traverse(o => { if (o.isMesh) o.castShadow = true; });
     const head = new THREE.Mesh(new THREE.SphereGeometry(5.5, 12, 12), new THREE.MeshStandardMaterial({ color: "#f1c27d" }));
     head.position.y = 27; head.castShadow = true;
     const visor = new THREE.Mesh(new THREE.ConeGeometry(6, 6, 4), new THREE.MeshStandardMaterial({ color: "#2c3e50" }));
     visor.position.y = 27; visor.rotation.x = Math.PI / 2; visor.rotation.z = Math.PI / 4;
     body.add(torso); body.add(head);
-    body.castShadow = true;
     scene.add(body);
 
     playerRig = { mesh: body, x: worldX(-20) + 60, z: worldZ(300), yaw: Math.PI, vy: 0, onGround: true };
@@ -2533,10 +2549,11 @@ function syncTowers() {
 function buildEnemyGroup(type, color, radius, isBoss) {
     const group = new THREE.Group();
     const mat = new THREE.MeshStandardMaterial({ color });
-    const body = new THREE.Mesh(new THREE.CapsuleGeometry(radius * 0.7, radius * 1.1, 4, 8), mat);
+    const body = makeCapsuleGroup(radius * 0.7, radius * 1.1, mat);
     body.position.y = radius * 1.2;
-    body.castShadow = true;
+    body.traverse(o => { if (o.isMesh) o.castShadow = true; });
     group.add(body);
+    group.userData.bodyMaterial = mat;
     if (isBoss) {
         const crown = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.6, radius * 0.8, 6), new THREE.MeshStandardMaterial({ color: "#f1c40f", emissive: "#886500", emissiveIntensity: 0.4 }));
         crown.position.y = radius * 2.3;
@@ -2593,7 +2610,7 @@ function syncEnemies() {
             entry.group.userData.phaseLabel = newLabel;
         }
         // Recolor the body if the underlying enemy color changed (e.g. boss rage/shield)
-        entry.group.children[0].material.color.set(enemy.color);
+        entry.group.userData.bodyMaterial.color.set(enemy.color);
     }
     for (const [enemy, entry] of enemyMeshes) {
         if (!seen.has(enemy)) {
