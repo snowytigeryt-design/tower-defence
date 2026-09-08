@@ -1,5 +1,5 @@
 // --- API CONFIGURATION ---
-const API_BASE = 'https://tower-9ucq.onrender.com';let authToken = localStorage.getItem('authToken') || null;
+const API_BASE = 'https://tower-9ucq.onrender.com/api';
 let currentUsername = localStorage.getItem('currentUsername') || null;
 
 // API Functions
