@@ -2033,6 +2033,7 @@ let mapGroup = null;          // ground/road/props for the current map, rebuilt 
 let playerRig = null;         // { mesh, x, z, yaw, vy, onGround }
 let cameraRig = { pitch: 0.18, distance: 70 };
 const keysDown = new Set();
+let mouseNDC = { x: 0, y: 0 }; // current cursor position in normalized device coords, used for raycasting
 let mouseSensitivity = 0.0024;
 let raycaster = null;
 const groundPlaneMath = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -2290,36 +2291,49 @@ function initThreeScene() {
     });
     document.addEventListener("keyup", (e) => keysDown.delete(e.code));
 
-    renderer.domElement.addEventListener("click", () => {
-        if (document.pointerLockElement !== renderer.domElement) {
-            renderer.domElement.requestPointerLock();
-            return;
-        }
-        handlePrimaryAction();
+    // Look control: hold and drag with the LEFT mouse button to rotate the camera.
+    // The cursor stays free the whole time. A press-and-release with little movement
+    // counts as a plain click (place a tower / interact) instead of a drag-look.
+    let dragging = false;
+    let dragMoved = false;
+    let downAt = { x: 0, y: 0 };
+    const dragThreshold = 4; // px of movement before it counts as "looking" instead of "clicking"
+
+    renderer.domElement.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        dragging = true;
+        dragMoved = false;
+        downAt = { x: e.clientX, y: e.clientY };
     });
-    // The hint overlay sits visually on top of the canvas while it's shown, so it needs
-    // its own listener - clicks on it don't reach renderer.domElement underneath.
-    document.getElementById("pointer-lock-hint").addEventListener("click", () => {
-        if (document.pointerLockElement !== renderer.domElement) {
-            renderer.domElement.requestPointerLock();
+    window.addEventListener("mouseup", (e) => {
+        if (e.button !== 0 || !dragging) return;
+        dragging = false;
+        if (!dragMoved) handlePrimaryAction();
+    });
+
+    renderer.domElement.addEventListener("mousemove", (e) => {
+        const rect = renderer.domElement.getBoundingClientRect();
+        mouseNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        mouseNDC.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+    });
+    window.addEventListener("mousemove", (e) => {
+        if (!dragging) return;
+        if (!dragMoved && (Math.abs(e.clientX - downAt.x) > dragThreshold || Math.abs(e.clientY - downAt.y) > dragThreshold)) {
+            dragMoved = true;
         }
+        if (dragMoved) {
+            playerRig.yaw -= e.movementX * mouseSensitivity;
+            cameraRig.pitch -= e.movementY * mouseSensitivity;
+            cameraRig.pitch = Math.max(-0.5, Math.min(1.1, cameraRig.pitch));
+        }
+    });
+
+    renderer.domElement.addEventListener("wheel", (e) => {
+        cameraRig.distance = Math.max(30, Math.min(160, cameraRig.distance + e.deltaY * 0.08));
     });
     renderer.domElement.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         if (placement.active) exitPlacementMode();
-    });
-    document.addEventListener("mousemove", (e) => {
-        if (document.pointerLockElement !== renderer.domElement) return;
-        playerRig.yaw -= e.movementX * mouseSensitivity;
-        cameraRig.pitch -= e.movementY * mouseSensitivity;
-        cameraRig.pitch = Math.max(-0.5, Math.min(1.1, cameraRig.pitch));
-    });
-    renderer.domElement.addEventListener("wheel", (e) => {
-        cameraRig.distance = Math.max(30, Math.min(160, cameraRig.distance + e.deltaY * 0.08));
-    });
-    document.addEventListener("pointerlockchange", () => {
-        const hint = document.getElementById("pointer-lock-hint");
-        if (hint) hint.style.display = document.pointerLockElement === renderer.domElement ? "none" : "flex";
     });
 }
 
@@ -2760,7 +2774,7 @@ function exitPlacementMode() {
 
 function updatePlacementPreview() {
     if (!placement.active) return;
-    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    raycaster.setFromCamera(mouseNDC, camera);
     const hit = new THREE.Vector3();
     if (!raycaster.ray.intersectPlane(groundPlaneMath, hit)) return;
 
@@ -2805,7 +2819,7 @@ function confirmPlacement() {
 
 // --- Interaction: click a placed tower (host/solo) to open its upgrade panel ---
 function tryInteractClick() {
-    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    raycaster.setFromCamera(mouseNDC, camera);
     let closest = null, closestDist = Infinity;
     for (const t of gameState.towers) {
         const entry = towerMeshes.get(t.uid);
@@ -2964,7 +2978,6 @@ let gameLoopStarted = false;
 function gameLoop() {
     requestAnimationFrame(gameLoop);
     const dt = Math.min(0.05, clock.getDelta());
-    document.getElementById("pointer-lock-hint").style.display = document.pointerLockElement === renderer.domElement ? "none" : "flex";
 
     updatePlayer(dt);
     updateCamera();
@@ -3227,7 +3240,7 @@ function handleGuestPrimaryAction() {
         return;
     }
 
-    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    raycaster.setFromCamera(mouseNDC, camera);
     guestSelectedUid = null;
     if (remoteState) {
         let closest = null, closestDist = Infinity, closestIdx = -1;
@@ -3314,7 +3327,6 @@ function endGame(victory) {
 }
 
 document.getElementById("btn-return-menu").addEventListener("click", () => {
-    if (document.pointerLockElement) document.exitPointerLock();
     showScreen("main-menu");
 });
 
