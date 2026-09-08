@@ -3110,9 +3110,16 @@ function applyRemoteAction(action) {
     if (!action || !currentMatch) return;
     const guestName = currentMatch.opponent; // the only other participant on a 2-player shared board
     if (action.type === "placeTower") {
-        // Only the host can place towers on a shared co-op board - ignore any placeTower
-        // action from the guest even if their client somehow sent one.
-        return;
+        const base = TOWER_DB[action.towerId];
+        if (!base) return;
+        const cost = base.levels[0].costCash;
+        if (walletOf(guestName) >= cost) {
+            spendFromWallet(guestName, cost);
+            const tower = new Tower(action.towerId, action.x, action.y, guestName);
+            tower.rotationY = action.rotationY || 0;
+            gameState.towers.push(tower);
+            updateGameUI();
+        }
     } else if (action.type === "upgradeTower") {
         const t = gameState.towers.find(tw => tw.uid === action.uid);
         if (t && t.owner === guestName) t.upgrade(); // only the tower's own owner can spend on it
@@ -3225,20 +3232,26 @@ function guestFrame() {
 }
 
 function buildGuestMatchLoadout() {
-    // Non-host players can't place towers on the shared board - show the loadout
-    // as a locked reference only, with no click handler to enter placement mode.
     const bar = document.getElementById("match-loadout");
     bar.innerHTML = "";
+    const cash = (remoteState && remoteState.playerCash) ? (remoteState.playerCash[currentUsername] || 0) : 0;
     playerData.loadout.forEach(id => {
         const t = TOWER_DB[id] || GOLDEN_TOWERS[id];
         const cost = GOLDEN_TOWERS[id] ? TOWER_DB[GOLDEN_TOWERS[id].baseId].levels[0].costCash : t.levels[0].costCash;
 
         const btn = document.createElement("div");
-        btn.className = "match-tower-btn disabled";
-        btn.title = "Only the host can place towers";
+        btn.className = `match-tower-btn ${cash < cost ? "disabled" : ""}`;
+        if (guestSelectedTowerToPlace === id) btn.classList.add("selected");
         if (GOLDEN_TOWERS[id]) btn.style.borderColor = "#ffd700";
 
         btn.innerHTML = `<strong>${t.name}</strong><span>$${cost}</span>`;
+        btn.onclick = () => {
+            if (cash >= cost) {
+                if (guestSelectedTowerToPlace === id) { guestSelectedTowerToPlace = null; exitPlacementMode(); }
+                else { guestSelectedTowerToPlace = id; enterPlacementMode(id); }
+                buildGuestMatchLoadout();
+            }
+        };
         bar.appendChild(btn);
     });
 }
@@ -3246,9 +3259,12 @@ function buildGuestMatchLoadout() {
 function handleGuestPrimaryAction() {
     if (!socket || !currentMatch) return;
 
-    // Guests can't place towers - if placement mode is somehow active, just cancel it
-    // instead of sending a placeTower action (the host would ignore it anyway).
     if (placement.active) {
+        if (!placement.valid) return;
+        socket.emit("match:action", {
+            toUsername: currentMatch.opponent,
+            action: { type: "placeTower", towerId: placement.towerId, x: placement.lastGameX, y: placement.lastGameY, rotationY: placement.rotationY }
+        });
         guestSelectedTowerToPlace = null;
         exitPlacementMode();
         buildGuestMatchLoadout();
