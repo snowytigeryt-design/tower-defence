@@ -2297,6 +2297,13 @@ function initThreeScene() {
         }
         handlePrimaryAction();
     });
+    // The hint overlay sits visually on top of the canvas while it's shown, so it needs
+    // its own listener - clicks on it don't reach renderer.domElement underneath.
+    document.getElementById("pointer-lock-hint").addEventListener("click", () => {
+        if (document.pointerLockElement !== renderer.domElement) {
+            renderer.domElement.requestPointerLock();
+        }
+    });
     renderer.domElement.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         if (placement.active) exitPlacementMode();
