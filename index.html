@@ -144,8 +144,16 @@
                     <div class="cash-ui">Cash: $<span id="game-cash">500</span></div>
                 </div>
                 
-                <!-- Canvas for Rendering -->
-                <canvas id="gameCanvas" width="800" height="600"></canvas>
+                <!-- 3D World Renders Here -->
+                <div id="game3d-container"></div>
+                <div id="crosshair"></div>
+                <div id="pointer-lock-hint">
+                    <div class="hint-box">
+                        <h3>Click to enter the battlefield</h3>
+                        <p>WASD move &middot; Shift sprint &middot; Space jump &middot; Mouse look</p>
+                        <p>Click a tower below, then click in the world to place it &middot; R / Shift+R to rotate &middot; Right-click or Esc to cancel</p>
+                    </div>
+                </div>
                 
                 <!-- Bottom Bar: In-Match Tower Selection -->
                 <div id="match-loadout" class="bottom-bar"></div>
@@ -179,6 +187,7 @@
         </div>
     </div>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

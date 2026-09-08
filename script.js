@@ -1,5 +1,6 @@
 // --- API CONFIGURATION ---
 const API_BASE = 'https://tower-9ucq.onrender.com/api';
+let authToken = localStorage.getItem('authToken') || null;
 let currentUsername = localStorage.getItem('currentUsername') || null;
 
 // API Functions
@@ -1487,9 +1488,19 @@ window.unequip = function(id) {
     saveProgress(); buildLoadout();
 };
 
-// --- 4. GAME ENGINE (Canvas, Objects, Logic) ---
-const canvas = document.getElementById("gameCanvas");
-const ctx = canvas.getContext("2d");
+// --- 4. GAME ENGINE (3D World, Objects, Logic) ---
+// COORDINATE NOTE: every gameplay object still lives in the ORIGINAL 2D game-space
+// (x, y) exactly like the old canvas version (0-800 x, 0-600 y). All damage, range,
+// targeting and movement math below is untouched from the 2D game. The only new thing
+// is a translation layer: worldPos(x, y) below maps that same (x, y) onto a 3D X/Z
+// plane so it can be rendered with Three.js. Height (world Y) is purely visual.
+function worldX(x) { return x - 400; }
+function worldZ(y) { return y - 300; }
+function toGameX(worldXVal) { return worldXVal + 400; }
+function toGameY(worldZVal) { return worldZVal + 300; }
+
+const MAP_BOUND_X = 460; // playable half-width in game-space units, with margin past the 800-wide canvas
+const MAP_BOUND_Z = 360; // playable half-depth, with margin past the 600-tall canvas
 
 let gameState = {
     running: false, cash: 500, hp: 100, wave: 1,
@@ -1502,17 +1513,17 @@ let gameState = {
     gameMode: "normal" // normal, molten, fallen, hardcore, challenge
 };
 
-// Map definitions with different paths and terrain
+// Map definitions with different paths and terrain (unchanged from the 2D game)
 const MAPS = {
     grasslands: {
         id: "grasslands",
         name: "Grasslands",
         description: "Simple curved path for beginners",
         difficulty: "Easy",
-        bgColor: "#27ae60",
-        pathColor: "#e67e22",
+        bgColor: "#3a7d3a",
+        pathColor: "#c88a4a",
         path: [
-            {x: -20, y: 150}, {x: 200, y: 150}, {x: 200, y: 400}, 
+            {x: -20, y: 150}, {x: 200, y: 150}, {x: 200, y: 400},
             {x: 600, y: 400}, {x: 600, y: 100}, {x: 820, y: 100}
         ]
     },
@@ -1521,8 +1532,8 @@ const MAPS = {
         name: "Desert",
         description: "Winding path with multiple turns",
         difficulty: "Medium",
-        bgColor: "#f4a460",
-        pathColor: "#8b4513",
+        bgColor: "#d2a465",
+        pathColor: "#8b5a2b",
         path: [
             {x: -20, y: 300}, {x: 150, y: 300}, {x: 150, y: 100},
             {x: 400, y: 100}, {x: 400, y: 500}, {x: 650, y: 500},
@@ -1534,8 +1545,8 @@ const MAPS = {
         name: "Tundra",
         description: "Long straight path with strategic corners",
         difficulty: "Medium",
-        bgColor: "#87ceeb",
-        pathColor: "#4682b4",
+        bgColor: "#a9c9d6",
+        pathColor: "#4d7fa3",
         path: [
             {x: -20, y: 50}, {x: 400, y: 50}, {x: 400, y: 300},
             {x: 200, y: 300}, {x: 200, y: 550}, {x: 600, y: 550},
@@ -1547,7 +1558,7 @@ const MAPS = {
         name: "Volcanic",
         description: "Complex path with tight corners",
         difficulty: "Hard",
-        bgColor: "#2c1810",
+        bgColor: "#4a2a20",
         pathColor: "#ff4500",
         path: [
             {x: -20, y: 200}, {x: 100, y: 200}, {x: 100, y: 100},
@@ -1561,8 +1572,8 @@ const MAPS = {
         name: "Forest",
         description: "Zigzag path through dense terrain",
         difficulty: "Hard",
-        bgColor: "#228b22",
-        pathColor: "#006400",
+        bgColor: "#1f5c2e",
+        pathColor: "#5c3a1e",
         path: [
             {x: -20, y: 300}, {x: 200, y: 300}, {x: 200, y: 150},
             {x: 350, y: 150}, {x: 350, y: 450}, {x: 500, y: 450},
@@ -1575,90 +1586,60 @@ const MAPS = {
 let currentMap = MAPS.grasslands;
 let path = currentMap.path;
 
-// Game mode definitions with modifiers
+// Game mode definitions with modifiers (unchanged from the 2D game)
 const GAME_MODES = {
     normal: {
-        id: "normal",
-        name: "Normal",
-        description: "Standard gameplay",
-        enemyHpMult: 1.0,
-        enemySpeedMult: 1.0,
-        cashMult: 1.0,
-        xpMult: 1.0,
-        coinMult: 1.0,
-        startingCash: 500,
-        startingHp: 100
+        id: "normal", name: "Normal", description: "Standard gameplay",
+        enemyHpMult: 1.0, enemySpeedMult: 1.0, cashMult: 1.0, xpMult: 1.0, coinMult: 1.0,
+        startingCash: 500, startingHp: 100
     },
     molten: {
-        id: "molten",
-        name: "Molten",
-        description: "Enemies have increased speed and HP",
-        enemyHpMult: 1.5,
-        enemySpeedMult: 1.3,
-        cashMult: 1.5,
-        xpMult: 1.5,
-        coinMult: 1.5,
-        startingCash: 600,
-        startingHp: 80
+        id: "molten", name: "Molten", description: "Enemies have increased speed and HP",
+        enemyHpMult: 1.5, enemySpeedMult: 1.3, cashMult: 1.5, xpMult: 1.5, coinMult: 1.5,
+        startingCash: 600, startingHp: 80
     },
     fallen: {
-        id: "fallen",
-        name: "Fallen",
-        description: "More enemies, stronger bosses",
-        enemyHpMult: 1.2,
-        enemySpeedMult: 1.1,
-        cashMult: 1.3,
-        xpMult: 1.3,
-        coinMult: 1.3,
-        startingCash: 550,
-        startingHp: 90
+        id: "fallen", name: "Fallen", description: "More enemies, stronger bosses",
+        enemyHpMult: 1.2, enemySpeedMult: 1.1, cashMult: 1.3, xpMult: 1.3, coinMult: 1.3,
+        startingCash: 550, startingHp: 90
     },
     hardcore: {
-        id: "hardcore",
-        name: "Hardcore",
-        description: "One life, no second chances",
-        enemyHpMult: 2.0,
-        enemySpeedMult: 1.5,
-        cashMult: 2.0,
-        xpMult: 2.0,
-        coinMult: 2.0,
-        startingCash: 700,
-        startingHp: 1
+        id: "hardcore", name: "Hardcore", description: "One life, no second chances",
+        enemyHpMult: 2.0, enemySpeedMult: 1.5, cashMult: 2.0, xpMult: 2.0, coinMult: 2.0,
+        startingCash: 700, startingHp: 1
     },
     challenge: {
-        id: "challenge",
-        name: "Challenge",
-        description: "Special enemy compositions",
-        enemyHpMult: 1.8,
-        enemySpeedMult: 1.2,
-        cashMult: 1.8,
-        xpMult: 1.8,
-        coinMult: 1.8,
-        startingCash: 650,
-        startingHp: 75
+        id: "challenge", name: "Challenge", description: "Special enemy compositions",
+        enemyHpMult: 1.8, enemySpeedMult: 1.2, cashMult: 1.8, xpMult: 1.8, coinMult: 1.8,
+        startingCash: 650, startingHp: 75
     }
 };
+
+// --- GAMEPLAY CLASSES ---
+// These are the exact same simulation classes as the 2D game: same stats, same
+// targeting rules, same damage math, same coordinate updates. Only draw() is gone -
+// visuals are now handled by the Object3DSync layer further down, which reads these
+// objects' plain (x, y) fields every frame and positions 3D meshes to match.
 
 class Enemy {
     constructor(type, waveMult) {
         this.x = path[0].x; this.y = path[0].y;
         this.pathIndex = 0;
         this.type = type;
-        
+
         const mode = GAME_MODES[gameState.gameMode];
-        
-        // Enemy balancing with special abilities
-        if(type === "normal") { 
-            this.hp = 10 * waveMult; this.speed = 1.2 * mode.enemySpeedMult; this.reward = 5 * mode.cashMult; 
-            this.color = "#e74c3c"; this.radius = 10; 
+
+        if(type === "normal") {
+            this.hp = 10 * waveMult; this.speed = 1.2 * mode.enemySpeedMult; this.reward = 5 * mode.cashMult;
+            this.color = "#e74c3c"; this.radius = 10;
         }
-        else if(type === "fast") { 
-            this.hp = 6 * waveMult; this.speed = 2.0 * mode.enemySpeedMult; this.reward = 5 * mode.cashMult; 
-            this.color = "#f39c12"; this.radius = 8; 
+        else if(type === "fast") {
+            this.hp = 6 * waveMult; this.speed = 2.0 * mode.enemySpeedMult; this.reward = 5 * mode.cashMult;
+            this.color = "#f39c12"; this.radius = 8;
         }
-        else if(type === "boss") { 
-            this.hp = 150 * waveMult; this.speed = 0.7 * mode.enemySpeedMult; this.reward = 100 * mode.cashMult; 
-            this.color = "#8e44ad"; this.radius = 18; 
+        else if(type === "boss") {
+            this.hp = 150 * waveMult; this.speed = 0.7 * mode.enemySpeedMult; this.reward = 100 * mode.cashMult;
+            this.color = "#8e44ad"; this.radius = 18;
             this.isBoss = true;
             this.phase = 1;
             this.maxPhases = 2;
@@ -1666,29 +1647,29 @@ class Enemy {
             this.rageThreshold = 0.5;
             this.raged = false;
         }
-        else if(type === "tank") { 
-            this.hp = 30 * waveMult; this.speed = 0.8 * mode.enemySpeedMult; this.reward = 15 * mode.cashMult; 
-            this.color = "#2c3e50"; this.radius = 14; 
+        else if(type === "tank") {
+            this.hp = 30 * waveMult; this.speed = 0.8 * mode.enemySpeedMult; this.reward = 15 * mode.cashMult;
+            this.color = "#2c3e50"; this.radius = 14;
         }
-        else if(type === "swarm") { 
-            this.hp = 3 * waveMult; this.speed = 2.5 * mode.enemySpeedMult; this.reward = 3 * mode.cashMult; 
-            this.color = "#1abc9c"; this.radius = 6; 
+        else if(type === "swarm") {
+            this.hp = 3 * waveMult; this.speed = 2.5 * mode.enemySpeedMult; this.reward = 3 * mode.cashMult;
+            this.color = "#1abc9c"; this.radius = 6;
         }
-        else if(type === "shielded") { 
-            this.hp = 15 * waveMult; this.speed = 1.0 * mode.enemySpeedMult; this.reward = 12 * mode.cashMult; 
-            this.color = "#95a5a6"; this.radius = 11; this.shield = 10 * waveMult; this.maxShield = this.shield; 
+        else if(type === "shielded") {
+            this.hp = 15 * waveMult; this.speed = 1.0 * mode.enemySpeedMult; this.reward = 12 * mode.cashMult;
+            this.color = "#95a5a6"; this.radius = 11; this.shield = 10 * waveMult; this.maxShield = this.shield;
         }
-        else if(type === "regen") { 
-            this.hp = 12 * waveMult; this.speed = 1.1 * mode.enemySpeedMult; this.reward = 10 * mode.cashMult; 
-            this.color = "#27ae60"; this.radius = 10; this.regenRate = 0.05; 
+        else if(type === "regen") {
+            this.hp = 12 * waveMult; this.speed = 1.1 * mode.enemySpeedMult; this.reward = 10 * mode.cashMult;
+            this.color = "#27ae60"; this.radius = 10; this.regenRate = 0.05;
         }
-        else if(type === "immune") { 
-            this.hp = 20 * waveMult; this.speed = 1.0 * mode.enemySpeedMult; this.reward = 18 * mode.cashMult; 
-            this.color = "#c0392b"; this.radius = 12; this.immuneTo = ["splash"]; 
+        else if(type === "immune") {
+            this.hp = 20 * waveMult; this.speed = 1.0 * mode.enemySpeedMult; this.reward = 18 * mode.cashMult;
+            this.color = "#c0392b"; this.radius = 12; this.immuneTo = ["splash"];
         }
-        else if(type === "boss2") { 
-            this.hp = 300 * waveMult; this.speed = 0.5 * mode.enemySpeedMult; this.reward = 200 * mode.cashMult; 
-            this.color = "#9b59b6"; this.radius = 22; 
+        else if(type === "boss2") {
+            this.hp = 300 * waveMult; this.speed = 0.5 * mode.enemySpeedMult; this.reward = 200 * mode.cashMult;
+            this.color = "#9b59b6"; this.radius = 22;
             this.isBoss = true;
             this.phase = 1;
             this.maxPhases = 3;
@@ -1699,39 +1680,34 @@ class Enemy {
             this.shielded = false;
             this.shieldAmount = 50 * waveMult;
         }
-        
+
         this.maxHp = this.hp;
         this.currentSpeed = this.speed;
         this.slowTimer = 0;
         this.burnTimer = 0;
         this.burnDamage = 0;
     }
-    
+
     update() {
-        // Boss phase and ability logic
         if (this.isBoss) {
             const hpPercent = this.hp / this.maxHp;
-            
-            // Rage ability
+
             if (this.abilities.includes("rage") && !this.raged && hpPercent < this.rageThreshold) {
                 this.raged = true;
                 this.speed *= 1.5;
-                this.color = "#e74c3c"; // Visual indicator
+                this.color = "#e74c3c";
                 this.phase++;
             }
-            
-            // Shield ability
+
             if (this.abilities.includes("shield") && !this.shielded && hpPercent < this.shieldThreshold) {
                 this.shielded = true;
                 this.shield = this.shieldAmount;
                 this.phase++;
-                this.color = "#3498db"; // Visual indicator
+                this.color = "#3498db";
             }
-            
-            // Summon ability (spawn minions)
+
             if (this.abilities.includes("summon") && this.phase === 2 && !this.summoned) {
                 this.summoned = true;
-                // Spawn 3 swarm enemies near the boss
                 for (let i = 0; i < 3; i++) {
                     const minion = new Enemy("swarm", 1);
                     minion.x = this.x + (Math.random() - 0.5) * 30;
@@ -1741,28 +1717,25 @@ class Enemy {
                 }
             }
         }
-        
-        // Regeneration
+
         if (this.regenRate && this.hp < this.maxHp) {
             this.hp = Math.min(this.maxHp, this.hp + this.regenRate);
         }
-        
-        // Burn damage
+
         if (this.burnTimer > 0) {
             this.hp -= this.burnDamage;
             this.burnTimer--;
         }
-        
-        // Slow effect
+
         if (this.slowTimer > 0) {
             this.currentSpeed = this.speed * 0.5;
             this.slowTimer--;
         } else {
             this.currentSpeed = this.speed;
         }
-        
+
         const target = path[this.pathIndex + 1];
-        if (!target) return true; // Reached end
+        if (!target) return true;
 
         const dx = target.x - this.x;
         const dy = target.y - this.y;
@@ -1772,8 +1745,8 @@ class Enemy {
             this.x = target.x; this.y = target.y;
             this.pathIndex++;
             if (this.pathIndex >= path.length - 1) {
-                gameState.hp -= 10; // Base takes damage
-                return true; 
+                gameState.hp -= 10;
+                return true;
             }
         } else {
             this.x += (dx / dist) * this.currentSpeed;
@@ -1781,71 +1754,12 @@ class Enemy {
         }
         return false;
     }
-    
-    draw() {
-        ctx.fillStyle = this.color;
-        ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2); ctx.fill();
-        
-        // Shield indicator
-        if (this.shield > 0) {
-            ctx.strokeStyle = "#3498db";
-            ctx.lineWidth = 2;
-            ctx.beginPath(); ctx.arc(this.x, this.y, this.radius + 3, 0, Math.PI * 2); ctx.stroke();
-        }
-        
-        // Boss health bar (larger and more detailed)
-        if (this.isBoss) {
-            const barWidth = 40;
-            const barHeight = 6;
-            const barY = this.y - this.radius - 15;
-            
-            // Background
-            ctx.fillStyle = "#333";
-            ctx.fillRect(this.x - barWidth/2, barY, barWidth, barHeight);
-            
-            // HP bar
-            ctx.fillStyle = "#e74c3c";
-            ctx.fillRect(this.x - barWidth/2, barY, barWidth * (this.hp / this.maxHp), barHeight);
-            
-            // Phase indicator
-            ctx.fillStyle = "#fff";
-            ctx.font = "10px Arial";
-            ctx.fillText(`P${this.phase}`, this.x - 5, barY - 3);
-            
-            // Shield bar for boss
-            if (this.shield > 0) {
-                ctx.fillStyle = "#3498db";
-                ctx.fillRect(this.x - barWidth/2, barY - 4, barWidth * (this.shield / this.shieldAmount), 3);
-            }
-        } else {
-            // Regular enemy HP bar
-            ctx.fillStyle = "red"; ctx.fillRect(this.x - 10, this.y - 15, 20, 4);
-            ctx.fillStyle = "green"; ctx.fillRect(this.x - 10, this.y - 15, 20 * (this.hp / this.maxHp), 4);
-            
-            // Shield Bar
-            if (this.shield > 0) {
-                ctx.fillStyle = "#3498db"; ctx.fillRect(this.x - 10, this.y - 20, 20 * (this.shield / this.maxShield), 3);
-            }
-        }
-        
-        // Status effect indicators
-        if (this.slowTimer > 0) {
-            ctx.fillStyle = "#3498db";
-            ctx.beginPath(); ctx.arc(this.x + 8, this.y - 8, 3, 0, Math.PI * 2); ctx.fill();
-        }
-        if (this.burnTimer > 0) {
-            ctx.fillStyle = "#e74c3c";
-            ctx.beginPath(); ctx.arc(this.x - 8, this.y - 8, 3, 0, Math.PI * 2); ctx.fill();
-        }
-    }
-    
+
     takeDamage(damage, type) {
-        // Check immunity
         if (this.immuneTo && this.immuneTo.includes(type)) {
-            return; // Immune to this damage type
+            return;
         }
-        
-        // Shield absorbs damage first
+
         if (this.shield > 0) {
             if (this.shield >= damage) {
                 this.shield -= damage;
@@ -1855,14 +1769,14 @@ class Enemy {
                 this.shield = 0;
             }
         }
-        
+
         this.hp -= damage;
     }
-    
+
     applySlow(amount, duration) {
         this.slowTimer = duration;
     }
-    
+
     applyBurn(damage, duration) {
         this.burnDamage = damage;
         this.burnTimer = duration;
@@ -1875,84 +1789,76 @@ class Tower {
         this.uid = nextTowerUid++;
         this.owner = owner || currentUsername;
         this.isGolden = GOLDEN_TOWERS[typeId] !== undefined;
-        
+
         if (this.isGolden) {
             this.goldenData = GOLDEN_TOWERS[typeId];
             this.baseData = TOWER_DB[this.goldenData.baseId];
         } else {
             this.baseData = TOWER_DB[typeId];
         }
-        
+
         this.x = x; this.y = y;
         this.level = 0;
         this.lastAttack = 0;
-        this.targetingMode = "first"; // first, last, strongest, weakest
-        this.charge = 0; // For accelerator
-        
-        // Apply golden multipliers if applicable
+        this.targetingMode = "first";
+        this.charge = 0;
+        this.facingAngle = 0; // radians, visual-only: which way the turret is currently facing
+        this.rotationY = 0; // radians, visual-only: the yaw the player chose while placing it
+
         this.stats = this.applyGoldenMultipliers(this.baseData.levels[0]);
     }
-    
+
     applyGoldenMultipliers(stats) {
         if (!this.isGolden || !this.goldenData.statMultipliers) return stats;
-        
+
         const multipliers = this.goldenData.statMultipliers;
         const modifiedStats = { ...stats };
-        
+
         for (let key in multipliers) {
             if (modifiedStats[key] !== undefined) {
-                if (key === "cooldown") {
-                    modifiedStats[key] = modifiedStats[key] * multipliers[key];
-                } else {
-                    modifiedStats[key] = modifiedStats[key] * multipliers[key];
-                }
+                modifiedStats[key] = modifiedStats[key] * multipliers[key];
             }
         }
-        
+
         return modifiedStats;
     }
-    
+
     update() {
-        // Farm logic
         if (this.baseData.type === "economy") {
             if (gameState.frames - this.lastAttack > (this.stats.cooldown / 16.66)) {
                 gameState.cash += this.stats.income;
                 updateGameUI();
                 this.lastAttack = gameState.frames;
-                
-                // Float text effect
                 gameState.projectiles.push(new FloatText("+$" + this.stats.income, this.x, this.y - 20));
             }
             return;
         }
 
-        // Accelerator charge logic
         if (this.baseData.type === "damage" && this.stats.chargeRate) {
             this.charge = Math.min(1, this.charge + this.stats.chargeRate);
         }
 
-        // Combat logic
         const effectiveCooldown = this.stats.cooldown / (1 + (this.charge * 0.5));
         if (gameState.frames - this.lastAttack > (effectiveCooldown / 16.66)) {
             let target = this.findTarget();
-            
+
             if (target) {
                 gameState.projectiles.push(new Projectile(this.x, this.y, target, this.stats, this.baseData.type, this));
                 this.lastAttack = gameState.frames;
-                this.charge = 0; // Reset charge after firing
+                this.charge = 0;
             }
         }
     }
-    
+
     findTarget() {
         let target = null;
         let bestValue = -1;
-        
+
         for (let enemy of gameState.enemies) {
             const dist = Math.hypot(enemy.x - this.x, enemy.y - this.y);
             if (dist <= this.stats.range) {
                 let currentValue = 0;
-                
+
                 switch(this.targetingMode) {
                     case "first":
                         currentValue = enemy.pathIndex * 1000 + dist;
@@ -1967,36 +1873,17 @@ class Tower {
                         currentValue = -enemy.hp;
                         break;
                 }
-                
+
                 if (currentValue > bestValue) {
                     bestValue = currentValue;
                     target = enemy;
                 }
             }
         }
-        
+
         return target;
     }
-    
-    draw() {
-        ctx.fillStyle = this.baseData.color;
-        ctx.beginPath(); ctx.arc(this.x, this.y, this.baseData.radius, 0, Math.PI * 2); ctx.fill();
-        
-        // Level indicator
-        ctx.fillStyle = "#fff";
-        ctx.font = "10px Arial";
-        ctx.fillText(this.level + 1, this.x - 3, this.y + 4);
-        
-        // Render gun barrel
-        ctx.strokeStyle = "#fff"; ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(this.x + 10, this.y - 10); ctx.stroke();
-        
-        // Targeting mode indicator
-        ctx.fillStyle = "#fff";
-        ctx.font = "8px Arial";
-        ctx.fillText(this.targetingMode[0].toUpperCase(), this.x - 3, this.y - this.baseData.radius - 5);
-    }
-    
+
     upgrade() {
         if (this.level < this.baseData.levels.length - 1) {
             const nextLevel = this.baseData.levels[this.level + 1];
@@ -2004,7 +1891,6 @@ class Tower {
                 gameState.cash -= nextLevel.costCash;
                 this.level++;
                 this.stats = this.applyGoldenMultipliers(nextLevel);
-                // Quest progress tracking
                 playerData.questProgress.towersUpgraded = (playerData.questProgress.towersUpgraded || 0) + 1;
                 updateGameUI();
                 return true;
@@ -2012,7 +1898,7 @@ class Tower {
         }
         return false;
     }
-    
+
     cycleTargeting() {
         const modes = ["first", "last", "strongest", "weakest"];
         const currentIndex = modes.indexOf(this.targetingMode);
@@ -2026,35 +1912,32 @@ class Projectile {
         this.stats = stats; this.type = type;
         this.tower = tower;
         this.speed = 8; this.active = true;
-        this.chainedEnemies = []; // For chain lightning
+        this.chainedEnemies = [];
+        this.impactX = null; this.impactY = null; // visual-only: filled in when it hits
     }
     update() {
         if (!this.target || this.target.hp <= 0) { this.active = false; return; }
-        
+
         const dx = this.target.x - this.x;
         const dy = this.target.y - this.y;
         const dist = Math.hypot(dx, dy);
 
         if (dist < this.speed) {
-            // Apply damage based on type
             if (this.type === "splash") {
-                // Splash damage
                 gameState.enemies.forEach(e => {
                     if (Math.hypot(e.x - this.target.x, e.y - this.target.y) <= this.stats.splash) {
                         e.takeDamage(this.stats.damage, "splash");
                     }
                 });
             } else if (this.type === "chain") {
-                // Chain lightning
                 this.target.takeDamage(this.stats.damage, "chain");
                 this.chainedEnemies.push(this.target);
-                
-                // Chain to additional enemies
+
                 let remainingChains = (this.stats.chainCount || 0) - this.chainedEnemies.length;
                 if (remainingChains > 0) {
                     let nextTarget = null;
                     let minDist = 100;
-                    
+
                     for (let e of gameState.enemies) {
                         if (!this.chainedEnemies.includes(e) && e.hp > 0) {
                             const d = Math.hypot(e.x - this.target.x, e.y - this.target.y);
@@ -2064,12 +1947,12 @@ class Projectile {
                             }
                         }
                     }
-                    
+
                     if (nextTarget) {
                         this.target = nextTarget;
                         this.x = this.target.x;
                         this.y = this.target.y;
-                        return; // Continue chaining
+                        return;
                     }
                 }
             } else if (this.type === "slow") {
@@ -2085,28 +1968,22 @@ class Projectile {
             } else {
                 this.target.takeDamage(this.stats.damage, "damage");
             }
-            
+
+            this.impactX = this.target.x; this.impactY = this.target.y;
             this.active = false;
         } else {
             this.x += (dx / dist) * this.speed;
             this.y += (dy / dist) * this.speed;
         }
     }
-    draw() {
-        ctx.fillStyle = this.type === "chain" ? "#9b59b6" : 
-                       this.type === "slow" ? "#3498db" : 
-                       this.type === "dot" ? "#e74c3c" : "#fff";
-        ctx.beginPath(); ctx.arc(this.x, this.y, 3, 0, Math.PI * 2); ctx.fill();
-    }
 }
 
 class FloatText {
-    constructor(text, x, y) { this.text = text; this.x = x; this.y = y; this.life = 60; this.active = true;}
+    constructor(text, x, y) { this.text = text; this.x = x; this.y = y; this.life = 60; this.active = true; }
     update() { this.y -= 0.5; this.life--; if(this.life <= 0) this.active = false; }
-    draw() { ctx.fillStyle = "#2ecc71"; ctx.font="14px Arial"; ctx.fillText(this.text, this.x, this.y); }
 }
 
-// --- 5. GAME LOOP & WAVE MANAGEMENT ---
+// --- 5. GAME LOOP & WAVE MANAGEMENT (unchanged from the 2D game) ---
 let spawnQueue = [];
 let spawnTimer = 0;
 
@@ -2114,199 +1991,850 @@ function generateWave() {
     const mode = GAME_MODES[gameState.gameMode];
     const waveMult = 1 + (gameState.wave * 0.2) * mode.enemyHpMult;
     let count = 5 + gameState.wave * 2;
-    
-    // Challenge mode has more enemies
+
     if (gameState.gameMode === "challenge") {
         count = Math.floor(count * 1.5);
     }
-    
+
     spawnQueue = [];
-    
+
     for (let i = 0; i < count; i++) {
         let type = "normal";
-        
-        // Progressive enemy introduction
+
         if (gameState.wave > 2 && i % 3 === 0) type = "fast";
         if (gameState.wave > 6 && i % 5 === 0) type = "tank";
         if (gameState.wave > 8 && i % 6 === 0) type = "swarm";
         if (gameState.wave > 10 && i % 7 === 0) type = "shielded";
         if (gameState.wave > 12 && i % 8 === 0) type = "regen";
         if (gameState.wave > 15 && i % 9 === 0) type = "immune";
-        
-        // Boss waves
+
         if (gameState.wave % 5 === 0 && i === count - 1) type = "boss";
         if (gameState.wave % 10 === 0 && i === count - 1) type = "boss2";
-        
-        // Challenge mode special compositions
+
         if (gameState.gameMode === "challenge" && gameState.wave % 3 === 0 && i % 2 === 0) {
             type = "immune";
         }
-        
+
         spawnQueue.push({ type, waveMult });
     }
     gameState.waveActive = true;
-    gameState.waveTimer = 180; // 3 seconds at 60fps
+    gameState.waveTimer = 180;
 }
 
-function gameLoop() {
-    if (!gameState.running) return;
-    gameState.frames++;
+// ============================================================================
+// 3D PRESENTATION LAYER (new). Everything below reads the plain-data gameplay
+// objects above (Tower/Enemy/Projectile x,y,stats,hp...) and keeps a parallel set
+// of Three.js meshes in sync with them each frame. Nothing in this section ever
+// changes gameState, damage, cost or targeting - it only look at it.
+// ============================================================================
 
-    // Clear Canvas with map background
-    ctx.fillStyle = currentMap.bgColor; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw Path with map colors
-    ctx.strokeStyle = currentMap.pathColor; ctx.lineWidth = 40; ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.beginPath();
-    ctx.moveTo(path[0].x, path[0].y);
-    for(let i=1; i<path.length; i++) ctx.lineTo(path[i].x, path[i].y);
-    ctx.stroke();
+let renderer, scene, camera, clock;
+let mapGroup = null;          // ground/road/props for the current map, rebuilt on map change
+let playerRig = null;         // { mesh, x, z, yaw, vy, onGround }
+let cameraRig = { pitch: 0.18, distance: 70 };
+const keysDown = new Set();
+let mouseSensitivity = 0.0024;
+let raycaster = null;
+const groundPlaneMath = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
-    // Spawning
-    if (gameState.waveActive && spawnQueue.length > 0) {
-        if (gameState.frames - spawnTimer > 60) {
-            const next = spawnQueue.shift();
-            gameState.enemies.push(new Enemy(next.type, next.waveMult));
-            spawnTimer = gameState.frames;
-        }
-    } else if (gameState.waveActive && gameState.enemies.length === 0) {
-        // Wave complete - wait for the player to click "START WAVE" for the next one
-        gameState.waveActive = false;
-        gameState.wave++;
-        gameState.cash += 100 + (gameState.wave * 20); // Wave completion bonus
-        updateGameUI();
+const towerMeshes = new Map();   // tower.uid -> { group, turretPivot, level, isGolden, rangeRing }
+const enemyMeshes = new Map();   // enemy instance -> { group, healthBar, lastHp }
+const projectileMeshes = new Map(); // projectile instance -> mesh
+const floatTextMeshes = new Map();  // FloatText instance -> sprite
+const impactEffects = []; // transient { mesh, life, maxLife, expandTo }
+let selectionRing = null; // ring shown under the currently-selected placed tower
+let placement = { active: false, towerId: null, rotationY: 0, group: null, valid: false };
+
+function makeCanvasTextSprite(text, opts = {}) {
+    const size = opts.size || 128;
+    const cnv = document.createElement("canvas");
+    cnv.width = size; cnv.height = size / 2;
+    const c2 = cnv.getContext("2d");
+    c2.fillStyle = opts.bg || "rgba(0,0,0,0)";
+    c2.fillRect(0, 0, cnv.width, cnv.height);
+    c2.font = `bold ${opts.fontSize || 40}px sans-serif`;
+    c2.fillStyle = opts.color || "#ffffff";
+    c2.textAlign = "center"; c2.textBaseline = "middle";
+    c2.fillText(text, cnv.width / 2, cnv.height / 2);
+    const tex = new THREE.CanvasTexture(cnv);
+    const mat = new THREE.SpriteMaterial({ map: tex, depthTest: opts.depthTest !== false, transparent: true });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(opts.scaleX || 14, (opts.scaleX || 14) / 2, 1);
+    return sprite;
+}
+
+function makeHealthBarSprite() {
+    const cnv = document.createElement("canvas");
+    cnv.width = 64; cnv.height = 16;
+    const tex = new THREE.CanvasTexture(cnv);
+    const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(10, 2.5, 1);
+    sprite.renderOrder = 999;
+    sprite.userData.canvas = cnv;
+    sprite.userData.ctx = cnv.getContext("2d");
+    sprite.userData.texture = tex;
+    return sprite;
+}
+
+function updateHealthBarSprite(sprite, ratio, shieldRatio, tint) {
+    const ctx2 = sprite.userData.ctx;
+    const cnv = sprite.userData.canvas;
+    ctx2.clearRect(0, 0, cnv.width, cnv.height);
+    ctx2.fillStyle = "#222";
+    ctx2.fillRect(0, 6, cnv.width, 6);
+    ctx2.fillStyle = tint || "#2ecc71";
+    ctx2.fillRect(0, 6, cnv.width * Math.max(0, Math.min(1, ratio)), 6);
+    if (shieldRatio > 0) {
+        ctx2.fillStyle = "#3498db";
+        ctx2.fillRect(0, 0, cnv.width * Math.max(0, Math.min(1, shieldRatio)), 4);
     }
+    sprite.userData.texture.needsUpdate = true;
+}
 
-    // Entities Update & Draw
-    gameState.towers.forEach(t => { t.update(); t.draw(); });
-    for (let i = gameState.enemies.length - 1; i >= 0; i--) {
-        const e = gameState.enemies[i];
-        if (e.hp <= 0) {
-            gameState.cash += e.reward;
-            // Quest progress tracking
-            playerData.questProgress.enemiesDefeated = (playerData.questProgress.enemiesDefeated || 0) + 1;
-            if (e.type === "boss" || e.type === "boss2") {
-                playerData.questProgress.bossesDefeated = (playerData.questProgress.bossesDefeated || 0) + 1;
-            }
-            gameState.enemies.splice(i, 1);
-            updateGameUI();
+// --- Map/world construction ---
+function clearGroup(group) {
+    if (!group) return;
+    while (group.children.length) {
+        const child = group.children.pop();
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+            else child.material.dispose();
+        }
+    }
+}
+
+function seededRandom(seed) {
+    let s = seed;
+    return function() {
+        s = (s * 9301 + 49297) % 233280;
+        return s / 233280;
+    };
+}
+
+function distanceToPathSegments(gx, gy) {
+    let min = Infinity;
+    for (let i = 0; i < path.length - 1; i++) {
+        const a = path[i], b = path[i + 1];
+        const abx = b.x - a.x, aby = b.y - a.y;
+        const lenSq = abx * abx + aby * aby || 1;
+        let t = ((gx - a.x) * abx + (gy - a.y) * aby) / lenSq;
+        t = Math.max(0, Math.min(1, t));
+        const px = a.x + abx * t, py = a.y + aby * t;
+        const d = Math.hypot(gx - px, gy - py);
+        if (d < min) min = d;
+    }
+    return min;
+}
+
+function buildMapWorld(map) {
+    if (!mapGroup) { mapGroup = new THREE.Group(); scene.add(mapGroup); }
+    clearGroup(mapGroup);
+
+    // Ground
+    const groundGeo = new THREE.PlaneGeometry(MAP_BOUND_X * 2 + 80, MAP_BOUND_Z * 2 + 80);
+    const groundMat = new THREE.MeshStandardMaterial({ color: map.bgColor, roughness: 1.0 });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    ground.userData.isGround = true;
+    mapGroup.add(ground);
+
+    // Road (a strip of segments following the path, plus rounded joints at corners)
+    const roadMat = new THREE.MeshStandardMaterial({ color: map.pathColor, roughness: 0.9 });
+    const roadWidth = 40;
+    for (let i = 0; i < path.length - 1; i++) {
+        const a = path[i], b = path[i + 1];
+        const ax = worldX(a.x), az = worldZ(a.y), bx = worldX(b.x), bz = worldZ(b.y);
+        const len = Math.hypot(bx - ax, bz - az);
+        const segGeo = new THREE.BoxGeometry(roadWidth, 0.4, len);
+        const seg = new THREE.Mesh(segGeo, roadMat);
+        seg.position.set((ax + bx) / 2, 0.2, (az + bz) / 2);
+        seg.rotation.y = Math.atan2(bx - ax, bz - az);
+        seg.receiveShadow = true;
+        mapGroup.add(seg);
+
+        const jointGeo = new THREE.CylinderGeometry(roadWidth / 2, roadWidth / 2, 0.4, 16);
+        const joint = new THREE.Mesh(jointGeo, roadMat);
+        joint.position.set(ax, 0.2, az);
+        joint.receiveShadow = true;
+        mapGroup.add(joint);
+    }
+    const lastPt = path[path.length - 1];
+    const lastJointGeo = new THREE.CylinderGeometry(roadWidth / 2, roadWidth / 2, 0.4, 16);
+    const lastJoint = new THREE.Mesh(lastJointGeo, roadMat);
+    lastJoint.position.set(worldX(lastPt.x), 0.2, worldZ(lastPt.y));
+    mapGroup.add(lastJoint);
+
+    // Spawn marker
+    const spawnGeo = new THREE.ConeGeometry(14, 20, 4);
+    const spawnMat = new THREE.MeshStandardMaterial({ color: "#e74c3c", emissive: "#5a0000", emissiveIntensity: 0.4 });
+    const spawnMarker = new THREE.Mesh(spawnGeo, spawnMat);
+    spawnMarker.position.set(worldX(path[0].x), 10, worldZ(path[0].y));
+    mapGroup.add(spawnMarker);
+
+    // Base marker (flag)
+    const poleGeo = new THREE.CylinderGeometry(1, 1, 26, 8);
+    const poleMat = new THREE.MeshStandardMaterial({ color: "#dddddd" });
+    const pole = new THREE.Mesh(poleGeo, poleMat);
+    pole.position.set(worldX(lastPt.x), 13, worldZ(lastPt.y));
+    pole.castShadow = true;
+    mapGroup.add(pole);
+    const flagGeo = new THREE.PlaneGeometry(14, 9);
+    const flagMat = new THREE.MeshStandardMaterial({ color: "#3498db", side: THREE.DoubleSide });
+    const flag = new THREE.Mesh(flagGeo, flagMat);
+    flag.position.set(worldX(lastPt.x) + 7, 22, worldZ(lastPt.y));
+    mapGroup.add(flag);
+
+    // Decorative props scattered off the road (deterministic per map so it doesn't jump around)
+    const rand = seededRandom(map.id.length * 977 + 13);
+    const propColor = map.id === "volcanic" ? "#5a2a1a" : map.id === "desert" ? "#a67c52" : "#2e5c2e";
+    for (let i = 0; i < 60; i++) {
+        const gx = (rand() - 0.5) * MAP_BOUND_X * 1.9;
+        const gy = (rand() - 0.5) * MAP_BOUND_Z * 1.9;
+        if (distanceToPathSegments(toGameX(gx), toGameY(gy)) < 45) continue; // keep clear of the road
+        const kind = rand();
+        let prop;
+        if (kind < 0.5) {
+            const s = 6 + rand() * 8;
+            prop = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), new THREE.MeshStandardMaterial({ color: "#6b6b6b", flatShading: true }));
+            prop.position.y = s * 0.4;
         } else {
-            if (e.update()) gameState.enemies.splice(i, 1); // Reached base
-            else e.draw();
+            const h = 20 + rand() * 24;
+            const trunk = new THREE.Mesh(new THREE.CylinderGeometry(2, 2.5, h * 0.4, 6), new THREE.MeshStandardMaterial({ color: "#5a3a20" }));
+            trunk.position.y = h * 0.2;
+            const leaves = new THREE.Mesh(new THREE.ConeGeometry(h * 0.35, h * 0.7, 8), new THREE.MeshStandardMaterial({ color: propColor, flatShading: true }));
+            leaves.position.y = h * 0.4 + h * 0.35;
+            prop = new THREE.Group();
+            prop.add(trunk); prop.add(leaves);
         }
+        prop.position.x = gx; prop.position.z = gy;
+        prop.castShadow = true; prop.receiveShadow = true;
+        prop.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+        mapGroup.add(prop);
     }
 
-    for (let i = gameState.projectiles.length - 1; i >= 0; i--) {
-        const p = gameState.projectiles[i];
-        p.update();
-        if (!p.active) gameState.projectiles.splice(i, 1);
-        else p.draw();
-    }
-
-    // Draw Placement Preview
-    if (gameState.selectedTowerToPlace) {
-        const rect = canvas.getBoundingClientRect();
-        const tData = TOWER_DB[gameState.selectedTowerToPlace];
-        
-        ctx.fillStyle = "rgba(255, 255, 255, 0.2)";
-        ctx.beginPath(); ctx.arc(mouseX, mouseY, tData.levels[0].range || 0, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = tData.color;
-        ctx.globalAlpha = 0.5;
-        ctx.beginPath(); ctx.arc(mouseX, mouseY, tData.radius, 0, Math.PI * 2); ctx.fill();
-        ctx.globalAlpha = 1.0;
-    }
-
-    // Draw selection ring
-    if (gameState.selectedPlacedTower) {
-        ctx.strokeStyle = "white"; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(gameState.selectedPlacedTower.x, gameState.selectedPlacedTower.y, gameState.selectedPlacedTower.stats.range || 0, 0, Math.PI*2); ctx.stroke();
-    }
-
-    // Game Over check
-    if (gameState.hp <= 0) {
-        endGame(false);
-        return;
-    }
-
-    // Shared-board co-op: push an authoritative snapshot to the guest a few times a second
-    if (currentMatch && currentMatch.isHost && gameState.frames % 3 === 0) {
-        broadcastCoopState();
-    }
-
-    requestAnimationFrame(gameLoop);
+    scene.fog = new THREE.Fog(map.bgColor, 260, 900);
+    renderer.setClearColor(new THREE.Color(map.bgColor).lerp(new THREE.Color("#000000"), 0.15));
 }
 
-// --- 6. IN-GAME INPUTS & UI ---
-let mouseX = 0, mouseY = 0;
-canvas.addEventListener("mousemove", (e) => {
-    const rect = canvas.getBoundingClientRect();
-    mouseX = e.clientX - rect.left;
-    mouseY = e.clientY - rect.top;
-});
+// --- Scene / lighting / camera setup ---
+function initThreeScene() {
+    const container = document.getElementById("game3d-container");
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(65, container.clientWidth / container.clientHeight, 0.1, 3000);
 
-canvas.addEventListener("click", (e) => {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x33361f, 0.7);
+    scene.add(hemi);
+    const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+    sun.position.set(180, 260, 120);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.left = -520; sun.shadow.camera.right = 520;
+    sun.shadow.camera.top = 420; sun.shadow.camera.bottom = -420;
+    sun.shadow.camera.far = 900;
+    scene.add(sun);
+
+    raycaster = new THREE.Raycaster();
+    clock = new THREE.Clock();
+
+    // Player rig: a small stylized capsule character
+    const body = new THREE.Group();
+    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(7, 14, 4, 8), new THREE.MeshStandardMaterial({ color: "#3498db" }));
+    torso.position.y = 16; torso.castShadow = true;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(5.5, 12, 12), new THREE.MeshStandardMaterial({ color: "#f1c27d" }));
+    head.position.y = 27; head.castShadow = true;
+    const visor = new THREE.Mesh(new THREE.ConeGeometry(6, 6, 4), new THREE.MeshStandardMaterial({ color: "#2c3e50" }));
+    visor.position.y = 27; visor.rotation.x = Math.PI / 2; visor.rotation.z = Math.PI / 4;
+    body.add(torso); body.add(head);
+    body.castShadow = true;
+    scene.add(body);
+
+    playerRig = { mesh: body, x: worldX(-20) + 60, z: worldZ(300), yaw: Math.PI, vy: 0, onGround: true };
+
+    window.addEventListener("resize", onWindowResize);
+    onWindowResize();
+
+    document.addEventListener("keydown", (e) => {
+        keysDown.add(e.code);
+        if (placement.active) {
+            if (e.code === "KeyR") {
+                placement.rotationY += e.shiftKey ? -Math.PI / 8 : Math.PI / 8;
+            } else if (e.code === "Escape") {
+                exitPlacementMode();
+            }
+        }
+    });
+    document.addEventListener("keyup", (e) => keysDown.delete(e.code));
+
+    renderer.domElement.addEventListener("click", () => {
+        if (document.pointerLockElement !== renderer.domElement) {
+            renderer.domElement.requestPointerLock();
+            return;
+        }
+        handlePrimaryAction();
+    });
+    renderer.domElement.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        if (placement.active) exitPlacementMode();
+    });
+    document.addEventListener("mousemove", (e) => {
+        if (document.pointerLockElement !== renderer.domElement) return;
+        playerRig.yaw -= e.movementX * mouseSensitivity;
+        cameraRig.pitch -= e.movementY * mouseSensitivity;
+        cameraRig.pitch = Math.max(-0.5, Math.min(1.1, cameraRig.pitch));
+    });
+    renderer.domElement.addEventListener("wheel", (e) => {
+        cameraRig.distance = Math.max(30, Math.min(160, cameraRig.distance + e.deltaY * 0.08));
+    });
+    document.addEventListener("pointerlockchange", () => {
+        const hint = document.getElementById("pointer-lock-hint");
+        if (hint) hint.style.display = document.pointerLockElement === renderer.domElement ? "none" : "flex";
+    });
+}
+
+function onWindowResize() {
+    const container = document.getElementById("game3d-container");
+    if (!container || !renderer) return;
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+}
+
+// --- Player movement & third-person camera ---
+function updatePlayer(dt) {
+    const forward = new THREE.Vector3(-Math.sin(playerRig.yaw), 0, -Math.cos(playerRig.yaw));
+    const right = new THREE.Vector3(Math.cos(playerRig.yaw), 0, -Math.sin(playerRig.yaw));
+    const sprint = keysDown.has("ShiftLeft") || keysDown.has("ShiftRight");
+    const speed = (sprint ? 130 : 78) * dt;
+
+    let move = new THREE.Vector3();
+    if (keysDown.has("KeyW") || keysDown.has("ArrowUp")) move.add(forward);
+    if (keysDown.has("KeyS") || keysDown.has("ArrowDown")) move.sub(forward);
+    if (keysDown.has("KeyD") || keysDown.has("ArrowRight")) move.add(right);
+    if (keysDown.has("KeyA") || keysDown.has("ArrowLeft")) move.sub(right);
+    if (move.lengthSq() > 0) {
+        move.normalize().multiplyScalar(speed);
+        playerRig.x += move.x;
+        playerRig.z += move.z;
+    }
+
+    // Jump / gravity (purely cosmetic hop, no gameplay effect)
+    if (keysDown.has("Space") && playerRig.onGround) {
+        playerRig.vy = 62;
+        playerRig.onGround = false;
+    }
+    playerRig.vy -= 180 * dt;
+    playerRig.groundY = (playerRig.groundY || 0) + playerRig.vy * dt;
+    if (playerRig.groundY <= 0) { playerRig.groundY = 0; playerRig.vy = 0; playerRig.onGround = true; }
+
+    // Keep inside the map
+    playerRig.x = Math.max(-MAP_BOUND_X, Math.min(MAP_BOUND_X, playerRig.x));
+    playerRig.z = Math.max(-MAP_BOUND_Z, Math.min(MAP_BOUND_Z, playerRig.z));
+
+    // Push out of towers so the player can't stand inside them
+    for (const t of gameState.towers) {
+        const tx = worldX(t.x), tz = worldZ(t.y);
+        const minDist = (t.baseData.radius || 12) + 9;
+        const dx = playerRig.x - tx, dz = playerRig.z - tz;
+        const d = Math.hypot(dx, dz);
+        if (d < minDist && d > 0.001) {
+            const push = (minDist - d);
+            playerRig.x += (dx / d) * push;
+            playerRig.z += (dz / d) * push;
+        }
+    }
+
+    playerRig.mesh.position.set(playerRig.x, playerRig.groundY, playerRig.z);
+    playerRig.mesh.rotation.y = playerRig.yaw;
+}
+
+function updateCamera() {
+    const target = new THREE.Vector3(playerRig.x, (playerRig.groundY || 0) + 20, playerRig.z);
+    const offset = new THREE.Vector3(0, 0, cameraRig.distance);
+    offset.applyAxisAngle(new THREE.Vector3(1, 0, 0), -cameraRig.pitch);
+    offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), playerRig.yaw);
+    let desired = target.clone().add(offset);
+
+    // Avoid clipping through the ground
+    if (desired.y < 6) desired.y = 6;
+
+    camera.position.copy(desired);
+    camera.lookAt(target);
+}
+
+// --- Tower 3D models (primitive-built, tiered by level, distinguished by type/color) ---
+function buildTowerGroup(baseData, level, isGolden) {
+    const group = new THREE.Group();
+    const tier = level; // 0,1,2
+    const color = new THREE.Color(baseData.color);
+    const baseR = 9 + tier * 2.5;
+    const baseH = 5 + tier * 2;
+
+    const baseMat = new THREE.MeshStandardMaterial({ color, metalness: 0.25, roughness: 0.65 });
+    const baseMesh = new THREE.Mesh(new THREE.CylinderGeometry(baseR, baseR * 1.15, baseH, 14), baseMat);
+    baseMesh.position.y = baseH / 2;
+    baseMesh.castShadow = true; baseMesh.receiveShadow = true;
+    group.add(baseMesh);
+
+    const turretPivot = new THREE.Group();
+    turretPivot.position.y = baseH;
+    group.add(turretPivot);
+
+    const turretMat = new THREE.MeshStandardMaterial({
+        color: isGolden ? new THREE.Color("#ffd700") : color.clone().offsetHSL(0, 0, 0.08),
+        metalness: 0.4, roughness: 0.4,
+        emissive: isGolden ? new THREE.Color("#8a6d00") : new THREE.Color(0, 0, 0),
+        emissiveIntensity: isGolden ? 0.5 : 0
+    });
+
+    const type = baseData.type;
+    let barrelLength = 14 + tier * 5;
+    if (type === "splash" || type === "dot") {
+        const turretBody = new THREE.Mesh(new THREE.SphereGeometry(6 + tier * 1.5, 10, 10), turretMat);
+        turretBody.position.y = 5;
+        turretPivot.add(turretBody);
+        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(2 + tier * 0.6, 2.6 + tier * 0.8, barrelLength, 8), turretMat);
+        barrel.rotation.x = Math.PI / 2;
+        barrel.position.set(0, 5, barrelLength / 2);
+        turretPivot.add(barrel);
+    } else if (type === "chain") {
+        const turretBody = new THREE.Mesh(new THREE.IcosahedronGeometry(6 + tier * 1.5, 0), turretMat);
+        turretBody.position.y = 6; turretBody.rotation.y = 0.4;
+        turretPivot.add(turretBody);
+        for (let i = 0; i < 3; i++) {
+            const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 10 + tier * 3, 6), turretMat);
+            rod.position.set(0, 6, 0);
+            rod.rotation.z = (i / 3) * Math.PI * 2;
+            rod.rotation.x = Math.PI / 2;
+            turretPivot.add(rod);
+        }
+    } else if (type === "slow") {
+        const turretBody = new THREE.Mesh(new THREE.CylinderGeometry(5 + tier, 6 + tier, 8, 10), turretMat);
+        turretBody.position.y = 5;
+        turretPivot.add(turretBody);
+        const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(4 + tier * 1.3, 0), new THREE.MeshStandardMaterial({ color: "#a8e0ff", transparent: true, opacity: 0.85, emissive: "#3498db", emissiveIntensity: 0.3 }));
+        crystal.position.set(0, 12, barrelLength * 0.4);
+        turretPivot.add(crystal);
+    } else if (type === "economy") {
+        const chest = new THREE.Mesh(new THREE.BoxGeometry(11, 8, 9), turretMat);
+        chest.position.y = 4;
+        turretPivot.add(chest);
+        const lid = new THREE.Mesh(new THREE.BoxGeometry(11.4, 2, 9.4), new THREE.MeshStandardMaterial({ color: "#ffd700", metalness: 0.6, roughness: 0.3 }));
+        lid.position.y = 8.5;
+        turretPivot.add(lid);
+    } else {
+        // damage / support / special / chain-adjacent default: gun turret + barrel
+        const turretBody = new THREE.Mesh(new THREE.BoxGeometry(9 + tier * 2, 7 + tier, 10 + tier * 2), turretMat);
+        turretBody.position.y = 5;
+        turretPivot.add(turretBody);
+        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(1.6 + tier * 0.5, 1.6 + tier * 0.5, barrelLength, 8), turretMat);
+        barrel.rotation.x = Math.PI / 2;
+        barrel.position.set(0, 5, barrelLength / 2 + 4);
+        turretPivot.add(barrel);
+    }
+    turretPivot.traverse(o => { if (o.isMesh) { o.castShadow = true; } });
+
+    // Level rings around the base - more rings = higher level
+    for (let i = 0; i <= tier; i++) {
+        const ring = new THREE.Mesh(
+            new THREE.TorusGeometry(baseR + 1.5, 0.5, 6, 20),
+            new THREE.MeshStandardMaterial({ color: isGolden ? "#ffd700" : "#ffffff", emissive: isGolden ? "#ffd700" : "#888888", emissiveIntensity: 0.4 })
+        );
+        ring.rotation.x = Math.PI / 2;
+        ring.position.y = 0.6 + i * 1.6;
+        group.add(ring);
+    }
+
+    // Small floating level-number label
+    const label = makeCanvasTextSprite(String(level + 1), { color: "#ffffff", scaleX: 9 });
+    label.position.y = baseH + 18 + tier * 4;
+    group.add(label);
+    group.userData.levelLabel = label;
+
+    group.userData.turretPivot = turretPivot;
+    group.userData.barrelTip = new THREE.Vector3(0, baseH + 5, barrelLength);
+    return group;
+}
+
+function ensureTowerMesh(tower) {
+    let entry = towerMeshes.get(tower.uid);
+    if (!entry || entry.level !== tower.level || entry.isGolden !== tower.isGolden) {
+        if (entry) { mapGroup.remove(entry.group); disposeObject3D(entry.group); }
+        const group = buildTowerGroup(tower.baseData, tower.level, tower.isGolden);
+        group.position.set(worldX(tower.x), 0, worldZ(tower.y));
+        group.rotation.y = tower.rotationY || 0;
+        group.castShadow = true;
+        scene.add(group);
+        entry = { group, turretPivot: group.userData.turretPivot, level: tower.level, isGolden: tower.isGolden };
+        towerMeshes.set(tower.uid, entry);
+    }
+    return entry;
+}
+
+function disposeObject3D(obj) {
+    obj.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) {
+            if (Array.isArray(o.material)) o.material.forEach(m => m.dispose());
+            else o.material.dispose();
+        }
+    });
+}
+
+function syncTowers() {
+    const seen = new Set();
+    for (const tower of gameState.towers) {
+        seen.add(tower.uid);
+        const entry = ensureTowerMesh(tower);
+        // Aim the turret at whatever the tower would currently target (visual only - reuses
+        // the tower's own real targeting rule, does not affect gameplay).
+        const target = tower.findTarget();
+        if (target) {
+            const dx = worldX(target.x) - entry.group.position.x;
+            const dz = worldZ(target.y) - entry.group.position.z;
+            const desiredYaw = Math.atan2(dx, dz) - tower.rotationY;
+            entry.turretPivot.rotation.y = desiredYaw;
+        }
+    }
+    for (const [uid, entry] of towerMeshes) {
+        if (!seen.has(uid)) {
+            scene.remove(entry.group);
+            disposeObject3D(entry.group);
+            towerMeshes.delete(uid);
+        }
+    }
+
+    // Selection range ring
+    if (gameState.selectedPlacedTower) {
+        const t = gameState.selectedPlacedTower;
+        if (!selectionRing) {
+            selectionRing = new THREE.Mesh(new THREE.RingGeometry(1, 1.6, 48), new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.5, side: THREE.DoubleSide }));
+            selectionRing.rotation.x = -Math.PI / 2;
+            scene.add(selectionRing);
+        }
+        const r = t.stats.range || 1;
+        selectionRing.scale.set(r, r, r);
+        selectionRing.position.set(worldX(t.x), 0.5, worldZ(t.y));
+        selectionRing.visible = true;
+    } else if (selectionRing) {
+        selectionRing.visible = false;
+    }
+}
+
+// --- Enemy 3D models ---
+function buildEnemyGroup(type, color, radius, isBoss) {
+    const group = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({ color });
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(radius * 0.7, radius * 1.1, 4, 8), mat);
+    body.position.y = radius * 1.2;
+    body.castShadow = true;
+    group.add(body);
+    if (isBoss) {
+        const crown = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.6, radius * 0.8, 6), new THREE.MeshStandardMaterial({ color: "#f1c40f", emissive: "#886500", emissiveIntensity: 0.4 }));
+        crown.position.y = radius * 2.3;
+        group.add(crown);
+    }
+    const shieldRing = new THREE.Mesh(new THREE.TorusGeometry(radius * 1.15, 0.5, 6, 16), new THREE.MeshStandardMaterial({ color: "#3498db", emissive: "#3498db", emissiveIntensity: 0.5, transparent: true, opacity: 0.7 }));
+    shieldRing.rotation.x = Math.PI / 2;
+    shieldRing.position.y = radius * 1.2;
+    shieldRing.visible = false;
+    group.add(shieldRing);
+    group.userData.shieldRing = shieldRing;
+
+    const healthBar = makeHealthBarSprite();
+    healthBar.position.y = radius * 2.6 + (isBoss ? 6 : 0);
+    group.add(healthBar);
+    group.userData.healthBar = healthBar;
+
+    if (isBoss) {
+        const phaseLabel = makeCanvasTextSprite("P1", { color: "#ffffff", scaleX: 10 });
+        phaseLabel.position.y = radius * 2.6 + 12;
+        group.add(phaseLabel);
+        group.userData.phaseLabel = phaseLabel;
+    }
+    return group;
+}
+
+function syncEnemies() {
+    const seen = new Set();
+    for (const enemy of gameState.enemies) {
+        seen.add(enemy);
+        let entry = enemyMeshes.get(enemy);
+        if (!entry) {
+            const group = buildEnemyGroup(enemy.type, enemy.color, enemy.radius, !!enemy.isBoss);
+            scene.add(group);
+            entry = { group, lastX: worldX(enemy.x), lastZ: worldZ(enemy.y) };
+            enemyMeshes.set(enemy, entry);
+        }
+        const nx = worldX(enemy.x), nz = worldZ(enemy.y);
+        const dx = nx - entry.lastX, dz = nz - entry.lastZ;
+        if (Math.hypot(dx, dz) > 0.01) {
+            entry.group.rotation.y = Math.atan2(dx, dz);
+        }
+        entry.group.position.set(nx, 0, nz);
+        entry.lastX = nx; entry.lastZ = nz;
+
+        entry.group.userData.shieldRing.visible = enemy.shield > 0;
+        updateHealthBarSprite(entry.group.userData.healthBar, enemy.hp / enemy.maxHp, enemy.shield > 0 ? enemy.shield / (enemy.maxShield || enemy.shieldAmount || 1) : 0, "#2ecc71");
+        if (entry.group.userData.phaseLabel && entry.group.userData.phaseLabel.userData.lastPhase !== enemy.phase) {
+            entry.group.remove(entry.group.userData.phaseLabel);
+            const newLabel = makeCanvasTextSprite("P" + enemy.phase, { color: "#ffffff", scaleX: 10 });
+            newLabel.position.y = entry.group.userData.healthBar.position.y + 6;
+            newLabel.userData.lastPhase = enemy.phase;
+            entry.group.add(newLabel);
+            entry.group.userData.phaseLabel = newLabel;
+        }
+        // Recolor the body if the underlying enemy color changed (e.g. boss rage/shield)
+        entry.group.children[0].material.color.set(enemy.color);
+    }
+    for (const [enemy, entry] of enemyMeshes) {
+        if (!seen.has(enemy)) {
+            scene.remove(entry.group);
+            disposeObject3D(entry.group);
+            enemyMeshes.delete(enemy);
+        }
+    }
+}
+
+// --- Projectiles & impact effects ---
+function projectileColor(type) {
+    return type === "chain" ? "#9b59b6" : type === "slow" ? "#3498db" : type === "dot" ? "#e74c3c" : "#ffffff";
+}
+
+function spawnImpactEffect(gx, gy, radius, color) {
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 10), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8 }));
+    mesh.position.set(worldX(gx), 8, worldZ(gy));
+    scene.add(mesh);
+    impactEffects.push({ mesh, life: 0, maxLife: 0.25, expandTo: Math.max(4, radius || 6) });
+}
+
+function syncProjectiles() {
+    const seen = new Set();
+    for (const p of gameState.projectiles) {
+        seen.add(p);
+        let mesh = projectileMeshes.get(p);
+        if (!mesh) {
+            mesh = new THREE.Mesh(new THREE.SphereGeometry(2.2, 8, 8), new THREE.MeshStandardMaterial({ color: projectileColor(p.type), emissive: projectileColor(p.type), emissiveIntensity: 0.6 }));
+            scene.add(mesh);
+            projectileMeshes.set(p, mesh);
+        }
+        mesh.position.set(worldX(p.x), 10, worldZ(p.y));
+        if (!p.active) {
+            scene.remove(mesh);
+            disposeObject3D(mesh);
+            projectileMeshes.delete(p);
+            if (p.impactX !== null) {
+                spawnImpactEffect(p.impactX, p.impactY, p.stats.splash, projectileColor(p.type));
+            }
+        }
+    }
+    for (const [p, mesh] of projectileMeshes) {
+        if (!seen.has(p)) {
+            scene.remove(mesh);
+            disposeObject3D(mesh);
+            projectileMeshes.delete(p);
+        }
+    }
+
+    for (let i = impactEffects.length - 1; i >= 0; i--) {
+        const fx = impactEffects[i];
+        fx.life += clock.getDelta ? 0 : 0; // no-op, dt applied by caller below
+    }
+}
+
+function updateImpactEffects(dt) {
+    for (let i = impactEffects.length - 1; i >= 0; i--) {
+        const fx = impactEffects[i];
+        fx.life += dt;
+        const t = Math.min(1, fx.life / fx.maxLife);
+        const scale = 1 + t * fx.expandTo;
+        fx.mesh.scale.set(scale, scale, scale);
+        fx.mesh.material.opacity = 0.8 * (1 - t);
+        if (t >= 1) {
+            scene.remove(fx.mesh);
+            disposeObject3D(fx.mesh);
+            impactEffects.splice(i, 1);
+        }
+    }
+}
+
+function syncFloatTexts() {
+    const seen = new Set();
+    for (const ft of gameState.projectiles) {
+        if (!(ft instanceof FloatText)) continue;
+        seen.add(ft);
+        let sprite = floatTextMeshes.get(ft);
+        if (!sprite) {
+            sprite = makeCanvasTextSprite(ft.text, { color: "#2ecc71", scaleX: 12 });
+            scene.add(sprite);
+            floatTextMeshes.set(ft, sprite);
+        }
+        sprite.position.set(worldX(ft.x), 22 + (60 - ft.life) * 0.4, worldZ(ft.y));
+        sprite.material.opacity = Math.max(0, ft.life / 60);
+    }
+    for (const [ft, sprite] of floatTextMeshes) {
+        if (!seen.has(ft)) {
+            scene.remove(sprite);
+            disposeObject3D(sprite);
+            floatTextMeshes.delete(ft);
+        }
+    }
+}
+
+// --- Tower placement (3D raycast-based) ---
+function enterPlacementMode(id) {
+    if (placement.active && placement.towerId === id) { exitPlacementMode(); return; }
+    if (placement.active) exitPlacementMode();
+
+    const base = TOWER_DB[id] || (GOLDEN_TOWERS[id] ? TOWER_DB[GOLDEN_TOWERS[id].baseId] : null);
+    if (!base) return;
+    const isGolden = !!GOLDEN_TOWERS[id];
+    placement.active = true;
+    placement.towerId = id;
+    placement.rotationY = 0;
+    placement.valid = false;
+
+    const group = buildTowerGroup(base, 0, isGolden);
+    group.traverse(o => {
+        if (o.isMesh) {
+            o.material = o.material.clone();
+            o.material.transparent = true;
+            o.material.opacity = 0.55;
+        }
+    });
+    const rangeGeo = new THREE.RingGeometry(1, 1.6, 48);
+    const rangeRing = new THREE.Mesh(rangeGeo, new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.35, side: THREE.DoubleSide }));
+    rangeRing.rotation.x = -Math.PI / 2;
+    const r = base.levels[0].range || 1;
+    rangeRing.scale.set(r, r, r);
+    rangeRing.position.y = 0.4;
+    group.add(rangeRing);
+    group.userData.rangeRing = rangeRing;
+
+    scene.add(group);
+    placement.group = group;
+    gameState.selectedTowerToPlace = id;
+}
+
+function exitPlacementMode() {
+    if (placement.group) {
+        scene.remove(placement.group);
+        disposeObject3D(placement.group);
+    }
+    placement = { active: false, towerId: null, rotationY: 0, group: null, valid: false };
+    gameState.selectedTowerToPlace = null;
+    buildMatchLoadout();
+}
+
+function updatePlacementPreview() {
+    if (!placement.active) return;
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const hit = new THREE.Vector3();
+    if (!raycaster.ray.intersectPlane(groundPlaneMath, hit)) return;
+
+    const gx = toGameX(hit.x), gy = toGameY(hit.z);
+    let valid = gx > 10 && gx < 790 && gy > 10 && gy < 590;
+    if (valid && distanceToPathSegments(gx, gy) < 28) valid = false;
+    if (valid) {
+        for (const t of gameState.towers) {
+            if (Math.hypot(t.x - gx, t.y - gy) < (t.baseData.radius || 12) + 16) { valid = false; break; }
+        }
+    }
+
+    placement.group.position.set(hit.x, 0, hit.z);
+    placement.group.rotation.y = placement.rotationY;
+    placement.valid = valid;
+    placement.lastGameX = gx;
+    placement.lastGameY = gy;
+    placement.group.traverse(o => {
+        if (o.isMesh && o !== placement.group.userData.rangeRing) {
+            o.material.color.set(valid ? o.material.color : o.material.color);
+        }
+    });
+    // Tint the whole preview red/green by adjusting the range ring + a simple emissive pulse on base
+    placement.group.userData.rangeRing.material.color.set(valid ? "#2ecc71" : "#e74c3c");
+}
+
+function confirmPlacement() {
+    if (!placement.active || !placement.valid) return;
+    const id = placement.towerId;
+    const base = TOWER_DB[id] || TOWER_DB[GOLDEN_TOWERS[id].baseId];
+    const cost = base.levels[0].costCash;
+    if (gameState.cash < cost) return;
+
+    gameState.cash -= cost;
+    const tower = new Tower(id, placement.lastGameX, placement.lastGameY, currentUsername);
+    tower.rotationY = placement.rotationY;
+    gameState.towers.push(tower);
+    playerData.questProgress.towersPlaced = (playerData.questProgress.towersPlaced || 0) + 1;
+    exitPlacementMode();
+    updateGameUI();
+}
+
+// --- Interaction: click a placed tower (host/solo) to open its upgrade panel ---
+function tryInteractClick() {
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    let closest = null, closestDist = Infinity;
+    for (const t of gameState.towers) {
+        const entry = towerMeshes.get(t.uid);
+        if (!entry) continue;
+        const hits = raycaster.intersectObject(entry.group, true);
+        if (hits.length > 0 && hits[0].distance < closestDist) {
+            closestDist = hits[0].distance;
+            closest = t;
+        }
+    }
+    if (closest && closestDist < 260) {
+        gameState.selectedPlacedTower = closest;
+        showUpgradePanel(closest);
+    } else {
+        gameState.selectedPlacedTower = null;
+        document.getElementById("upgrade-panel").classList.add("hidden");
+    }
+}
+
+function handlePrimaryAction() {
     if (currentMatch && !currentMatch.isHost) {
-        handleGuestCanvasClick();
+        handleGuestPrimaryAction();
         return;
     }
-
-    // Attempt place tower
-    if (gameState.selectedTowerToPlace) {
-        const base = TOWER_DB[gameState.selectedTowerToPlace];
-        const cost = base.levels[0].costCash;
-        if (gameState.cash >= cost) {
-            // Simplified placement (no collision check for MVP)
-            gameState.cash -= cost;
-            gameState.towers.push(new Tower(gameState.selectedTowerToPlace, mouseX, mouseY, currentUsername));
-            // Quest progress tracking
-            playerData.questProgress.towersPlaced = (playerData.questProgress.towersPlaced || 0) + 1;
-            gameState.selectedTowerToPlace = null;
-            buildMatchLoadout();
-            updateGameUI();
-        }
-        return;
+    if (placement.active) {
+        confirmPlacement();
+    } else {
+        tryInteractClick();
     }
+}
 
-    // Attempt select placed tower for upgrade
-    gameState.selectedPlacedTower = null;
-    for (let t of gameState.towers) {
-        if (Math.hypot(t.x - mouseX, t.y - mouseY) < t.baseData.radius * 2) {
-            gameState.selectedPlacedTower = t;
-            showUpgradePanel(t);
-            break;
-        }
-    }
-    if (!gameState.selectedPlacedTower) document.getElementById("upgrade-panel").classList.add("hidden");
-});
-
+// --- 6. IN-GAME UI ---
 function buildMatchLoadout() {
     const bar = document.getElementById("match-loadout");
     bar.innerHTML = "";
     playerData.loadout.forEach(id => {
         const t = TOWER_DB[id] || GOLDEN_TOWERS[id];
-        let cost, towerData;
-        
+        let cost;
         if (GOLDEN_TOWERS[id]) {
-            // Golden tower - use base tower's cost but with golden stats
             const baseTower = TOWER_DB[t.baseId];
             cost = baseTower.levels[0].costCash;
-            towerData = { ...baseTower, ...t, isGolden: true };
         } else {
             cost = t.levels[0].costCash;
-            towerData = t;
         }
-        
+
         const btn = document.createElement("div");
         btn.className = `match-tower-btn ${gameState.cash < cost ? "disabled" : ""}`;
         if (gameState.selectedTowerToPlace === id) btn.classList.add("selected");
         if (GOLDEN_TOWERS[id]) btn.style.borderColor = "#ffd700";
-        
+
         btn.innerHTML = `<strong>${t.name}</strong><span>$${cost}</span>`;
         btn.onclick = () => {
-            if (gameState.cash >= cost) {
-                gameState.selectedTowerToPlace = gameState.selectedTowerToPlace === id ? null : id;
-                buildMatchLoadout();
-            }
+            if (gameState.cash >= cost) enterPlacementMode(id);
         };
         bar.appendChild(btn);
     });
@@ -2316,8 +2844,7 @@ function updateGameUI() {
     document.getElementById("game-hp").innerText = gameState.hp;
     document.getElementById("game-wave").innerText = gameState.wave;
     document.getElementById("game-cash").innerText = gameState.cash;
-    
-    // Wave status display + START WAVE button state
+
     const timerEl = document.getElementById("wave-timer-ui");
     const startBtn = document.getElementById("btn-start-wave");
     if (gameState.waveActive) {
@@ -2327,8 +2854,8 @@ function updateGameUI() {
         timerEl.innerText = "Ready for next wave";
         startBtn.disabled = false;
     }
-    
-    buildMatchLoadout(); // Update availability colors
+
+    buildMatchLoadout();
 }
 
 function showUpgradePanel(tower) {
@@ -2339,13 +2866,12 @@ function showUpgradePanel(tower) {
     document.getElementById("upg-dmg").innerText = tower.stats.damage || tower.stats.income;
     document.getElementById("upg-range").innerText = tower.stats.range || 0;
     document.getElementById("upg-targeting").innerText = tower.targetingMode.charAt(0).toUpperCase() + tower.targetingMode.slice(1);
-    
-    // Targeting mode button
+
     document.getElementById("btn-targeting").onclick = () => {
         tower.cycleTargeting();
         showUpgradePanel(tower);
     };
-    
+
     const upgBtn = document.getElementById("btn-upgrade");
     if (tower.level < tower.baseData.levels.length - 1) {
         const next = tower.baseData.levels[tower.level + 1];
@@ -2378,25 +2904,30 @@ function startGame() {
     const mode = GAME_MODES[gameState.gameMode];
     nextTowerUid = 1;
     gameState = {
-        running: true, 
-        cash: mode.startingCash, 
-        hp: mode.startingHp, 
+        running: true,
+        cash: mode.startingCash,
+        hp: mode.startingHp,
         wave: 1,
         towers: [], enemies: [], projectiles: [],
         selectedTowerToPlace: null, selectedPlacedTower: null,
-        waveActive: false, 
+        waveActive: false,
         waveTimer: 0,
         frames: 0,
         gameMode: gameState.gameMode
     };
     document.getElementById("game-over-overlay").classList.add("hidden");
     document.getElementById("upgrade-panel").classList.add("hidden");
+
+    if (!renderer) initThreeScene();
+    buildMapWorld(currentMap);
+    playerRig.x = worldX(path[0].x) + 60;
+    playerRig.z = worldZ(path[0].y);
+    playerRig.yaw = Math.PI;
+
     updateGameUI();
-    // Wave 1 no longer starts automatically - the player clicks "START WAVE" when ready.
-    requestAnimationFrame(gameLoop);
+    if (!gameLoopStarted) { gameLoopStarted = true; requestAnimationFrame(gameLoop); }
 }
 
-// Called when the local player clicks "START WAVE" (host in co-op, or solo play).
 function startNextWave() {
     if (!gameState.running || gameState.waveActive) return;
     generateWave();
@@ -2404,11 +2935,88 @@ function startNextWave() {
     if (currentMatch) sendMatchEvent({ type: "wave", wave: gameState.wave });
 }
 
-// --- SHARED-BOARD CO-OP: HOST SIDE ---
-// The host runs the real simulation (gameState) as normal. These two functions are its
-// only extra responsibilities: tell the guest what the board looks like, and accept the
-// guest's requested actions (place/upgrade/sell/re-target) against that same real board.
+let gameLoopStarted = false;
 
+function gameLoop() {
+    requestAnimationFrame(gameLoop);
+    const dt = Math.min(0.05, clock.getDelta());
+    document.getElementById("pointer-lock-hint").style.display = document.pointerLockElement === renderer.domElement ? "none" : "flex";
+
+    updatePlayer(dt);
+    updateCamera();
+    updatePlacementPreview();
+    updateImpactEffects(dt);
+
+    const screenEl = document.getElementById("game-screen");
+    if (!screenEl.classList.contains("active")) { renderer.render(scene, camera); return; }
+
+    if (currentMatch && !currentMatch.isHost) {
+        guestFrame(dt);
+        renderer.render(scene, camera);
+        return;
+    }
+
+    if (!gameState.running) { renderer.render(scene, camera); return; }
+    gameState.frames++;
+
+    if (gameState.waveActive && spawnQueue.length > 0) {
+        if (gameState.frames - spawnTimer > 60) {
+            const next = spawnQueue.shift();
+            gameState.enemies.push(new Enemy(next.type, next.waveMult));
+            spawnTimer = gameState.frames;
+        }
+    } else if (gameState.waveActive && gameState.enemies.length === 0) {
+        gameState.waveActive = false;
+        gameState.wave++;
+        gameState.cash += 100 + (gameState.wave * 20);
+        updateGameUI();
+    }
+
+    gameState.towers.forEach(t => t.update());
+    for (let i = gameState.enemies.length - 1; i >= 0; i--) {
+        const e = gameState.enemies[i];
+        if (e.hp <= 0) {
+            gameState.cash += e.reward;
+            playerData.questProgress.enemiesDefeated = (playerData.questProgress.enemiesDefeated || 0) + 1;
+            if (e.type === "boss" || e.type === "boss2") {
+                playerData.questProgress.bossesDefeated = (playerData.questProgress.bossesDefeated || 0) + 1;
+            }
+            spawnImpactEffect(e.x, e.y, e.radius, e.color);
+            gameState.enemies.splice(i, 1);
+            enemyMeshes.has(e); // (mesh removed in syncEnemies via seen-set diff)
+            updateGameUI();
+        } else {
+            if (e.update()) gameState.enemies.splice(i, 1);
+        }
+    }
+
+    for (let i = gameState.projectiles.length - 1; i >= 0; i--) {
+        const p = gameState.projectiles[i];
+        if (p instanceof FloatText) { p.update(); if (!p.active) gameState.projectiles.splice(i, 1); continue; }
+        p.update();
+        if (!p.active) { /* removed from scene in syncProjectiles */ }
+    }
+    syncProjectiles();
+    gameState.projectiles = gameState.projectiles.filter(p => p.active !== false);
+
+    syncTowers();
+    syncEnemies();
+    syncFloatTexts();
+
+    if (gameState.hp <= 0) {
+        endGame(false);
+        renderer.render(scene, camera);
+        return;
+    }
+
+    if (currentMatch && currentMatch.isHost && gameState.frames % 3 === 0) {
+        broadcastCoopState();
+    }
+
+    renderer.render(scene, camera);
+}
+
+// --- SHARED-BOARD CO-OP: HOST SIDE ---
 function broadcastCoopState() {
     if (!socket || !currentMatch || !currentMatch.isHost) return;
     const state = {
@@ -2418,7 +3026,7 @@ function broadcastCoopState() {
         towers: gameState.towers.map(t => ({
             uid: t.uid, typeId: t.typeId, isGolden: t.isGolden, owner: t.owner,
             x: t.x, y: t.y, level: t.level, targetingMode: t.targetingMode,
-            color: t.baseData.color, radius: t.baseData.radius
+            color: t.baseData.color, radius: t.baseData.radius, rotationY: t.rotationY
         })),
         enemies: gameState.enemies.map(e => ({
             x: e.x, y: e.y, hp: e.hp, maxHp: e.maxHp, color: e.color, radius: e.radius,
@@ -2426,7 +3034,7 @@ function broadcastCoopState() {
             shield: e.shield || 0, maxShield: e.maxShield || e.shieldAmount || 0,
             slowTimer: e.slowTimer, burnTimer: e.burnTimer
         })),
-        projectiles: gameState.projectiles.map(p => ({ x: p.x, y: p.y, type: p.type }))
+        projectiles: gameState.projectiles.filter(p => !(p instanceof FloatText)).map(p => ({ x: p.x, y: p.y, type: p.type }))
     };
     socket.emit("match:state", { toUsername: currentMatch.opponent, state });
 }
@@ -2439,7 +3047,9 @@ function applyRemoteAction(action) {
         const cost = base.levels[0].costCash;
         if (gameState.cash >= cost) {
             gameState.cash -= cost;
-            gameState.towers.push(new Tower(action.towerId, action.x, action.y, currentMatch.opponent));
+            const tower = new Tower(action.towerId, action.x, action.y, currentMatch.opponent);
+            tower.rotationY = action.rotationY || 0;
+            gameState.towers.push(tower);
             updateGameUI();
         }
     } else if (action.type === "upgradeTower") {
@@ -2463,8 +3073,13 @@ function applyRemoteAction(action) {
 }
 
 // --- SHARED-BOARD CO-OP: GUEST SIDE ---
-// The guest never simulates the board itself - it just renders whatever snapshot the
-// host last sent, and turns clicks into action requests sent back to the host.
+// NOTE: the guest doesn't run the real simulation - it renders whatever snapshot the
+// host last sent. Since remoteState objects are plain data (not Tower/Enemy instances),
+// the guest reuses the same 3D model builders but keys its mesh pools by array index
+// instead of object identity. Turret aim is a simple "nearest enemy in range" approximation
+// since the guest doesn't have access to the host's real targeting-mode logic.
+let guestTowerMeshes = new Map(); // index -> entry
+let guestEnemyMeshes = new Map(); // index -> entry
 
 function startGuestMatch() {
     document.getElementById("game-over-overlay").classList.add("hidden");
@@ -2472,78 +3087,80 @@ function startGuestMatch() {
     remoteState = null;
     guestSelectedTowerToPlace = null;
     guestSelectedUid = null;
+
+    if (!renderer) initThreeScene();
+    buildMapWorld(currentMap);
+    playerRig.x = worldX(path[0].x) + 60;
+    playerRig.z = worldZ(path[0].y);
+    playerRig.yaw = Math.PI;
+
     buildGuestMatchLoadout();
-    requestAnimationFrame(guestRenderLoop);
+    if (!gameLoopStarted) { gameLoopStarted = true; requestAnimationFrame(gameLoop); }
 }
 
-function guestRenderLoop() {
-    if (!currentMatch || currentMatch.isHost) return; // match ended, or role changed
-    guestRenderLoop._frame = (guestRenderLoop._frame || 0) + 1;
-    if (guestRenderLoop._frame % 30 === 0) buildGuestMatchLoadout();
+function guestFrame() {
+    if (!currentMatch || currentMatch.isHost) return;
+    if (!remoteState) return;
 
-    ctx.fillStyle = currentMap.bgColor; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = currentMap.pathColor; ctx.lineWidth = 40; ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.beginPath(); ctx.moveTo(path[0].x, path[0].y);
-    for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
-    ctx.stroke();
+    document.getElementById("game-hp").innerText = remoteState.hp;
+    document.getElementById("game-wave").innerText = remoteState.wave;
+    document.getElementById("game-cash").innerText = remoteState.cash;
+    document.getElementById("wave-timer-ui").innerText = remoteState.waveActive ? "Wave in progress" : "Ready for next wave";
+    document.getElementById("btn-start-wave").disabled = remoteState.waveActive;
 
-    if (remoteState) {
-        document.getElementById("game-hp").innerText = remoteState.hp;
-        document.getElementById("game-wave").innerText = remoteState.wave;
-        document.getElementById("game-cash").innerText = remoteState.cash;
-        const timerEl = document.getElementById("wave-timer-ui");
-        timerEl.innerText = remoteState.waveActive ? "Wave in progress" : "Ready for next wave";
-        document.getElementById("btn-start-wave").disabled = remoteState.waveActive;
-
-        remoteState.towers.forEach(t => {
-            ctx.fillStyle = t.color;
-            ctx.beginPath(); ctx.arc(t.x, t.y, t.radius, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = "#fff"; ctx.font = "10px Arial";
-            ctx.fillText(t.level + 1, t.x - 3, t.y + 4);
-            // Ring the teammate's towers so it's clear this is a shared board
-            if (t.owner && t.owner !== currentUsername) {
-                ctx.strokeStyle = "#f39c12"; ctx.lineWidth = 2;
-                ctx.beginPath(); ctx.arc(t.x, t.y, t.radius + 3, 0, Math.PI * 2); ctx.stroke();
-            }
-            if (t.uid === guestSelectedUid) {
-                ctx.strokeStyle = "white"; ctx.lineWidth = 1;
-                ctx.beginPath(); ctx.arc(t.x, t.y, 80, 0, Math.PI * 2); ctx.stroke();
-            }
-        });
-
-        remoteState.enemies.forEach(e => {
-            ctx.fillStyle = e.color;
-            ctx.beginPath(); ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = "red"; ctx.fillRect(e.x - 10, e.y - 15, 20, 4);
-            ctx.fillStyle = "green"; ctx.fillRect(e.x - 10, e.y - 15, 20 * (e.hp / e.maxHp), 4);
-            if (e.shield > 0) {
-                ctx.fillStyle = "#3498db"; ctx.fillRect(e.x - 10, e.y - 20, 20 * (e.shield / (e.maxShield || 1)), 3);
-            }
-        });
-
-        remoteState.projectiles.forEach(p => {
-            ctx.fillStyle = p.type === "chain" ? "#9b59b6" : p.type === "slow" ? "#3498db" : p.type === "dot" ? "#e74c3c" : "#fff";
-            ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI * 2); ctx.fill();
-        });
-
-        if (guestSelectedTowerToPlace) {
-            const tData = TOWER_DB[guestSelectedTowerToPlace];
-            ctx.fillStyle = "rgba(255, 255, 255, 0.2)";
-            ctx.beginPath(); ctx.arc(mouseX, mouseY, tData.levels[0].range || 0, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = tData.color; ctx.globalAlpha = 0.5;
-            ctx.beginPath(); ctx.arc(mouseX, mouseY, tData.radius, 0, Math.PI * 2); ctx.fill();
-            ctx.globalAlpha = 1.0;
+    const seenT = new Set();
+    remoteState.towers.forEach((t, i) => {
+        seenT.add(i);
+        let entry = guestTowerMeshes.get(i);
+        if (!entry || entry.level !== t.level) {
+            if (entry) { scene.remove(entry.group); disposeObject3D(entry.group); }
+            const base = TOWER_DB[t.typeId];
+            const group = buildTowerGroup(base, t.level, t.isGolden);
+            group.position.set(worldX(t.x), 0, worldZ(t.y));
+            group.rotation.y = t.rotationY || 0;
+            scene.add(group);
+            entry = { group, turretPivot: group.userData.turretPivot, level: t.level };
+            guestTowerMeshes.set(i, entry);
         }
-
-        if (remoteState.hp <= 0) {
-            document.getElementById("game-over-overlay").classList.remove("hidden");
-            document.getElementById("end-title").innerText = "MATCH OVER";
-            document.getElementById("end-stats").innerHTML = `Waves Cleared: ${Math.max(0, remoteState.wave - 1)}`;
-            return; // stop the render loop, match is over
+        // Approximate aim: face nearest enemy in range
+        let nearest = null, nearestD = Infinity;
+        for (const e of remoteState.enemies) {
+            const d = Math.hypot(e.x - t.x, e.y - t.y);
+            if (d < nearestD) { nearestD = d; nearest = e; }
         }
+        if (nearest) {
+            const dx = worldX(nearest.x) - entry.group.position.x;
+            const dz = worldZ(nearest.y) - entry.group.position.z;
+            entry.turretPivot.rotation.y = Math.atan2(dx, dz) - (t.rotationY || 0);
+        }
+    });
+    for (const [i, entry] of guestTowerMeshes) {
+        if (!seenT.has(i)) { scene.remove(entry.group); disposeObject3D(entry.group); guestTowerMeshes.delete(i); }
     }
 
-    requestAnimationFrame(guestRenderLoop);
+    const seenE = new Set();
+    remoteState.enemies.forEach((e, i) => {
+        seenE.add(i);
+        let entry = guestEnemyMeshes.get(i);
+        if (!entry) {
+            const group = buildEnemyGroup(null, e.color, e.radius, !!e.isBoss);
+            scene.add(group);
+            entry = { group };
+            guestEnemyMeshes.set(i, entry);
+        }
+        entry.group.position.set(worldX(e.x), 0, worldZ(e.y));
+        entry.group.userData.shieldRing.visible = e.shield > 0;
+        updateHealthBarSprite(entry.group.userData.healthBar, e.hp / e.maxHp, e.shield > 0 ? e.shield / (e.maxShield || 1) : 0, "#2ecc71");
+    });
+    for (const [i, entry] of guestEnemyMeshes) {
+        if (!seenE.has(i)) { scene.remove(entry.group); disposeObject3D(entry.group); guestEnemyMeshes.delete(i); }
+    }
+
+    if (remoteState.hp <= 0) {
+        document.getElementById("game-over-overlay").classList.remove("hidden");
+        document.getElementById("end-title").innerText = "MATCH OVER";
+        document.getElementById("end-stats").innerHTML = `Waves Cleared: ${Math.max(0, remoteState.wave - 1)}`;
+    }
 }
 
 function buildGuestMatchLoadout() {
@@ -2562,7 +3179,8 @@ function buildGuestMatchLoadout() {
         btn.innerHTML = `<strong>${t.name}</strong><span>$${cost}</span>`;
         btn.onclick = () => {
             if (cash >= cost) {
-                guestSelectedTowerToPlace = guestSelectedTowerToPlace === id ? null : id;
+                if (guestSelectedTowerToPlace === id) { guestSelectedTowerToPlace = null; exitPlacementMode(); }
+                else { guestSelectedTowerToPlace = id; enterPlacementMode(id); }
                 buildGuestMatchLoadout();
             }
         };
@@ -2570,30 +3188,40 @@ function buildGuestMatchLoadout() {
     });
 }
 
-function handleGuestCanvasClick() {
+function handleGuestPrimaryAction() {
     if (!socket || !currentMatch) return;
 
-    if (guestSelectedTowerToPlace) {
+    if (placement.active) {
+        if (!placement.valid) return;
         socket.emit("match:action", {
             toUsername: currentMatch.opponent,
-            action: { type: "placeTower", towerId: guestSelectedTowerToPlace, x: mouseX, y: mouseY }
+            action: { type: "placeTower", towerId: placement.towerId, x: placement.lastGameX, y: placement.lastGameY, rotationY: placement.rotationY }
         });
         guestSelectedTowerToPlace = null;
+        exitPlacementMode();
         buildGuestMatchLoadout();
         return;
     }
 
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
     guestSelectedUid = null;
     if (remoteState) {
-        for (const t of remoteState.towers) {
-            if (Math.hypot(t.x - mouseX, t.y - mouseY) < t.radius * 2) {
-                guestSelectedUid = t.uid;
-                showGuestUpgradePanel(t);
-                break;
+        let closest = null, closestDist = Infinity, closestIdx = -1;
+        remoteState.towers.forEach((t, i) => {
+            const entry = guestTowerMeshes.get(i);
+            if (!entry) return;
+            const hits = raycaster.intersectObject(entry.group, true);
+            if (hits.length > 0 && hits[0].distance < closestDist) {
+                closestDist = hits[0].distance; closest = t; closestIdx = i;
             }
+        });
+        if (closest && closestDist < 260) {
+            guestSelectedUid = closest.uid;
+            showGuestUpgradePanel(closest);
+            return;
         }
     }
-    if (guestSelectedUid === null) document.getElementById("upgrade-panel").classList.add("hidden");
+    document.getElementById("upgrade-panel").classList.add("hidden");
 }
 
 function showGuestUpgradePanel(t) {
@@ -2636,8 +3264,7 @@ function endGame(victory) {
     const mode = GAME_MODES[gameState.gameMode];
     const coinsEarned = Math.floor(gameState.wave * 15 * mode.coinMult);
     const xpEarned = Math.floor(gameState.wave * 25 * mode.xpMult);
-    
-    // Quest progress tracking
+
     if (victory) {
         playerData.questProgress.matchesWon = (playerData.questProgress.matchesWon || 0) + 1;
         if (gameState.gameMode === "hardcore") {
@@ -2645,11 +3272,11 @@ function endGame(victory) {
         }
     }
     playerData.questProgress.wavesReached = Math.max(playerData.questProgress.wavesReached || 0, gameState.wave - 1);
-    
+
     document.getElementById("game-over-overlay").classList.remove("hidden");
     document.getElementById("end-title").innerText = victory ? "VICTORY!" : "GAME OVER";
     document.getElementById("end-stats").innerHTML = `Waves Cleared: ${gameState.wave - 1}<br>Coins Earned: <span class="coin-text">+${coinsEarned}</span><br>XP Earned: +${xpEarned}`;
-    
+
     playerData.coins += coinsEarned;
     addXP(xpEarned);
     saveProgress();
@@ -2662,24 +3289,24 @@ function endGame(victory) {
     }
 }
 
-document.getElementById("btn-return-menu").addEventListener("click", () => showScreen("main-menu"));
+document.getElementById("btn-return-menu").addEventListener("click", () => {
+    if (document.pointerLockElement) document.exitPointerLock();
+    showScreen("main-menu");
+});
 
 document.getElementById("btn-start-wave").addEventListener("click", () => {
     if (currentMatch && !currentMatch.isHost) {
-        // Guest: ask the host (who runs the real simulation) to start the wave
         if (!socket || !currentMatch) return;
         socket.emit("match:action", { toUsername: currentMatch.opponent, action: { type: "startWave" } });
     } else {
-        // Host or solo play: start it directly
         startNextWave();
     }
 });
 
 // --- Initialize ---
 async function initializeApp() {
-    // Check if user has a valid session
     const isValidSession = await verifySession();
-    
+
     if (isValidSession) {
         showScreen("main-menu");
         updateMenuStats();
