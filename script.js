@@ -2281,6 +2281,14 @@ function initThreeScene() {
 
     document.addEventListener("keydown", (e) => {
         keysDown.add(e.code);
+        if (e.code === "ControlLeft" || e.code === "ControlRight") {
+            e.preventDefault();
+            if (document.pointerLockElement === renderer.domElement) {
+                document.exitPointerLock();
+            } else {
+                renderer.domElement.requestPointerLock();
+            }
+        }
         if (placement.active) {
             if (e.code === "KeyR") {
                 placement.rotationY += e.shiftKey ? -Math.PI / 8 : Math.PI / 8;
@@ -2291,42 +2299,25 @@ function initThreeScene() {
     });
     document.addEventListener("keyup", (e) => keysDown.delete(e.code));
 
-    // Look control: hold and drag with the LEFT mouse button to rotate the camera.
-    // The cursor stays free the whole time. A press-and-release with little movement
-    // counts as a plain click (place a tower / interact) instead of a drag-look.
-    let dragging = false;
-    let dragMoved = false;
-    let downAt = { x: 0, y: 0 };
-    const dragThreshold = 4; // px of movement before it counts as "looking" instead of "clicking"
-
-    renderer.domElement.addEventListener("mousedown", (e) => {
-        if (e.button !== 0) return;
-        dragging = true;
-        dragMoved = false;
-        downAt = { x: e.clientX, y: e.clientY };
-    });
-    window.addEventListener("mouseup", (e) => {
-        if (e.button !== 0 || !dragging) return;
-        dragging = false;
-        if (!dragMoved) handlePrimaryAction();
-    });
-
+    // Look control: press Ctrl to lock the mouse and look around by moving it; press
+    // Ctrl again to unlock and get the free cursor back for clicking UI/towers.
     renderer.domElement.addEventListener("mousemove", (e) => {
         const rect = renderer.domElement.getBoundingClientRect();
         mouseNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
         mouseNDC.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
     });
-    window.addEventListener("mousemove", (e) => {
-        if (!dragging) return;
-        if (!dragMoved && (Math.abs(e.clientX - downAt.x) > dragThreshold || Math.abs(e.clientY - downAt.y) > dragThreshold)) {
-            dragMoved = true;
-        }
-        if (dragMoved) {
-            playerRig.yaw -= e.movementX * mouseSensitivity;
-            cameraRig.pitch -= e.movementY * mouseSensitivity;
-            cameraRig.pitch = Math.max(-0.5, Math.min(1.1, cameraRig.pitch));
-        }
+    document.addEventListener("mousemove", (e) => {
+        if (document.pointerLockElement !== renderer.domElement) return;
+        playerRig.yaw -= e.movementX * mouseSensitivity;
+        cameraRig.pitch -= e.movementY * mouseSensitivity;
+        cameraRig.pitch = Math.max(-0.5, Math.min(1.1, cameraRig.pitch));
     });
+    document.addEventListener("pointerlockchange", () => {
+        const crosshair = document.getElementById("crosshair");
+        if (crosshair) crosshair.style.display = document.pointerLockElement === renderer.domElement ? "block" : "none";
+    });
+
+    renderer.domElement.addEventListener("click", () => handlePrimaryAction());
 
     renderer.domElement.addEventListener("wheel", (e) => {
         cameraRig.distance = Math.max(30, Math.min(160, cameraRig.distance + e.deltaY * 0.08));
@@ -2335,6 +2326,13 @@ function initThreeScene() {
         e.preventDefault();
         if (placement.active) exitPlacementMode();
     });
+}
+
+// While the mouse is locked, aim from the screen center (crosshair); otherwise use
+// wherever the free cursor actually is.
+function currentRaycastNDC() {
+    if (document.pointerLockElement === renderer.domElement) return { x: 0, y: 0 };
+    return mouseNDC;
 }
 
 function onWindowResize() {
@@ -2774,7 +2772,7 @@ function exitPlacementMode() {
 
 function updatePlacementPreview() {
     if (!placement.active) return;
-    raycaster.setFromCamera(mouseNDC, camera);
+    raycaster.setFromCamera(currentRaycastNDC(), camera);
     const hit = new THREE.Vector3();
     if (!raycaster.ray.intersectPlane(groundPlaneMath, hit)) return;
 
@@ -2819,7 +2817,7 @@ function confirmPlacement() {
 
 // --- Interaction: click a placed tower (host/solo) to open its upgrade panel ---
 function tryInteractClick() {
-    raycaster.setFromCamera(mouseNDC, camera);
+    raycaster.setFromCamera(currentRaycastNDC(), camera);
     let closest = null, closestDist = Infinity;
     for (const t of gameState.towers) {
         const entry = towerMeshes.get(t.uid);
@@ -3240,7 +3238,7 @@ function handleGuestPrimaryAction() {
         return;
     }
 
-    raycaster.setFromCamera(mouseNDC, camera);
+    raycaster.setFromCamera(currentRaycastNDC(), camera);
     guestSelectedUid = null;
     if (remoteState) {
         let closest = null, closestDist = Infinity, closestIdx = -1;
@@ -3327,6 +3325,7 @@ function endGame(victory) {
 }
 
 document.getElementById("btn-return-menu").addEventListener("click", () => {
+    if (document.pointerLockElement) document.exitPointerLock();
     showScreen("main-menu");
 });
 
