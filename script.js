@@ -975,7 +975,13 @@ function connectSocket() {
 
     // Guest receives authoritative board snapshots from the host
     socket.on("match:state", ({ state }) => {
-        if (currentMatch && !currentMatch.isHost) remoteState = state;
+        if (currentMatch && !currentMatch.isHost) {
+            remoteState = state;
+            // Refresh the tower tray so affordability (cash >= cost) is checked against
+            // the latest wallet balance, not the stale $0 snapshot from before the first
+            // state arrived - that stale closure was why guests could never select a tower.
+            buildGuestMatchLoadout();
+        }
     });
 
     // Host receives action requests from the guest and applies them to the real, shared gameState
