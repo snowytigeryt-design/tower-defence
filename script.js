@@ -1783,6 +1783,17 @@ class Enemy {
     }
 }
 
+// --- Per-player wallets (co-op: each player has their own money, not a shared pot) ---
+function ensureWallet(username) {
+    if (!gameState.playerCash) gameState.playerCash = {};
+    if (gameState.playerCash[username] === undefined) gameState.playerCash[username] = 0;
+    return gameState.playerCash[username];
+}
+function walletOf(username) { return (gameState.playerCash && gameState.playerCash[username]) || 0; }
+function addToWallet(username, amount) { ensureWallet(username); gameState.playerCash[username] += amount; }
+function spendFromWallet(username, amount) { ensureWallet(username); gameState.playerCash[username] -= amount; }
+function myCash() { return walletOf(currentUsername); }
+
 class Tower {
     constructor(typeId, x, y, owner) {
         this.typeId = typeId;
@@ -1826,8 +1837,8 @@ class Tower {
     update() {
         if (this.baseData.type === "economy") {
             if (gameState.frames - this.lastAttack > (this.stats.cooldown / 16.66)) {
-                gameState.cash += this.stats.income;
-                updateGameUI();
+                addToWallet(this.owner, this.stats.income);
+                if (this.owner === currentUsername) updateGameUI();
                 this.lastAttack = gameState.frames;
                 gameState.projectiles.push(new FloatText("+$" + this.stats.income, this.x, this.y - 20));
             }
@@ -1887,12 +1898,12 @@ class Tower {
     upgrade() {
         if (this.level < this.baseData.levels.length - 1) {
             const nextLevel = this.baseData.levels[this.level + 1];
-            if (gameState.cash >= nextLevel.costCash) {
-                gameState.cash -= nextLevel.costCash;
+            if (walletOf(this.owner) >= nextLevel.costCash) {
+                spendFromWallet(this.owner, nextLevel.costCash);
                 this.level++;
                 this.stats = this.applyGoldenMultipliers(nextLevel);
                 playerData.questProgress.towersUpgraded = (playerData.questProgress.towersUpgraded || 0) + 1;
-                updateGameUI();
+                if (this.owner === currentUsername) updateGameUI();
                 return true;
             }
         }
@@ -1927,10 +1938,12 @@ class Projectile {
                 gameState.enemies.forEach(e => {
                     if (Math.hypot(e.x - this.target.x, e.y - this.target.y) <= this.stats.splash) {
                         e.takeDamage(this.stats.damage, "splash");
+                        e.lastDamagedBy = this.tower.owner;
                     }
                 });
             } else if (this.type === "chain") {
                 this.target.takeDamage(this.stats.damage, "chain");
+                this.target.lastDamagedBy = this.tower.owner;
                 this.chainedEnemies.push(this.target);
 
                 let remainingChains = (this.stats.chainCount || 0) - this.chainedEnemies.length;
@@ -1957,16 +1970,19 @@ class Projectile {
                 }
             } else if (this.type === "slow") {
                 this.target.takeDamage(this.stats.damage || 0, "slow");
+                this.target.lastDamagedBy = this.tower.owner;
                 if (this.stats.slowAmount && this.stats.slowDuration) {
                     this.target.applySlow(this.stats.slowAmount, this.stats.slowDuration);
                 }
             } else if (this.type === "dot") {
                 this.target.takeDamage(this.stats.damage || 0, "dot");
+                this.target.lastDamagedBy = this.tower.owner;
                 if (this.stats.burnDamage && this.stats.burnDuration) {
                     this.target.applyBurn(this.stats.burnDamage, this.stats.burnDuration);
                 }
             } else {
                 this.target.takeDamage(this.stats.damage, "damage");
+                this.target.lastDamagedBy = this.tower.owner;
             }
 
             this.impactX = this.target.x; this.impactY = this.target.y;
@@ -2804,9 +2820,9 @@ function confirmPlacement() {
     const id = placement.towerId;
     const base = TOWER_DB[id] || TOWER_DB[GOLDEN_TOWERS[id].baseId];
     const cost = base.levels[0].costCash;
-    if (gameState.cash < cost) return;
+    if (myCash() < cost) return;
 
-    gameState.cash -= cost;
+    spendFromWallet(currentUsername, cost);
     const tower = new Tower(id, placement.lastGameX, placement.lastGameY, currentUsername);
     tower.rotationY = placement.rotationY;
     gameState.towers.push(tower);
@@ -2864,13 +2880,13 @@ function buildMatchLoadout() {
         }
 
         const btn = document.createElement("div");
-        btn.className = `match-tower-btn ${gameState.cash < cost ? "disabled" : ""}`;
+        btn.className = `match-tower-btn ${myCash() < cost ? "disabled" : ""}`;
         if (gameState.selectedTowerToPlace === id) btn.classList.add("selected");
         if (GOLDEN_TOWERS[id]) btn.style.borderColor = "#ffd700";
 
         btn.innerHTML = `<strong>${t.name}</strong><span>$${cost}</span>`;
         btn.onclick = () => {
-            if (gameState.cash >= cost) enterPlacementMode(id);
+            if (myCash() >= cost) enterPlacementMode(id);
         };
         bar.appendChild(btn);
     });
@@ -2879,7 +2895,7 @@ function buildMatchLoadout() {
 function updateGameUI() {
     document.getElementById("game-hp").innerText = gameState.hp;
     document.getElementById("game-wave").innerText = gameState.wave;
-    document.getElementById("game-cash").innerText = gameState.cash;
+    document.getElementById("game-cash").innerText = myCash();
 
     const timerEl = document.getElementById("wave-timer-ui");
     const startBtn = document.getElementById("btn-start-wave");
@@ -2896,8 +2912,9 @@ function updateGameUI() {
 
 function showUpgradePanel(tower) {
     const p = document.getElementById("upgrade-panel");
+    const isOwner = tower.owner === currentUsername;
     p.classList.remove("hidden");
-    document.getElementById("upg-title").innerText = tower.baseData.name;
+    document.getElementById("upg-title").innerText = tower.baseData.name + (isOwner ? "" : ` (${tower.owner})`);
     document.getElementById("upg-level").innerText = tower.level + 1;
     document.getElementById("upg-dmg").innerText = tower.stats.damage || tower.stats.income;
     document.getElementById("upg-range").innerText = tower.stats.range || 0;
@@ -2909,10 +2926,13 @@ function showUpgradePanel(tower) {
     };
 
     const upgBtn = document.getElementById("btn-upgrade");
-    if (tower.level < tower.baseData.levels.length - 1) {
+    if (!isOwner) {
+        document.getElementById("upg-cost").innerText = "-";
+        upgBtn.disabled = true;
+    } else if (tower.level < tower.baseData.levels.length - 1) {
         const next = tower.baseData.levels[tower.level + 1];
         document.getElementById("upg-cost").innerText = next.costCash;
-        upgBtn.disabled = gameState.cash < next.costCash;
+        upgBtn.disabled = myCash() < next.costCash;
         upgBtn.onclick = () => {
             if(tower.upgrade()) showUpgradePanel(tower);
         };
@@ -2921,9 +2941,12 @@ function showUpgradePanel(tower) {
         upgBtn.disabled = true;
     }
 
-    document.getElementById("upg-sell").innerText = Math.floor(tower.stats.costCash * 0.5);
-    document.getElementById("btn-sell").onclick = () => {
-        gameState.cash += Math.floor(tower.stats.costCash * 0.5);
+    const sellBtn = document.getElementById("btn-sell");
+    document.getElementById("upg-sell").innerText = isOwner ? Math.floor(tower.stats.costCash * 0.5) : "-";
+    sellBtn.disabled = !isOwner;
+    sellBtn.onclick = () => {
+        if (!isOwner) return;
+        addToWallet(currentUsername, Math.floor(tower.stats.costCash * 0.5));
         gameState.towers = gameState.towers.filter(t => t !== tower);
         gameState.selectedPlacedTower = null;
         p.classList.add("hidden");
@@ -2941,7 +2964,7 @@ function startGame() {
     nextTowerUid = 1;
     gameState = {
         running: true,
-        cash: mode.startingCash,
+        playerCash: {}, // per-player wallets - co-op does NOT share a cash pool
         hp: mode.startingHp,
         wave: 1,
         towers: [], enemies: [], projectiles: [],
@@ -2951,6 +2974,8 @@ function startGame() {
         frames: 0,
         gameMode: gameState.gameMode
     };
+    gameState.playerCash[currentUsername] = mode.startingCash;
+    if (currentMatch) gameState.playerCash[currentMatch.opponent] = mode.startingCash;
     document.getElementById("game-over-overlay").classList.add("hidden");
     document.getElementById("upgrade-panel").classList.add("hidden");
 
@@ -3003,7 +3028,9 @@ function gameLoop() {
     } else if (gameState.waveActive && gameState.enemies.length === 0) {
         gameState.waveActive = false;
         gameState.wave++;
-        gameState.cash += 100 + (gameState.wave * 20);
+        const bonus = 100 + (gameState.wave * 20);
+        addToWallet(currentUsername, bonus);
+        if (currentMatch) addToWallet(currentMatch.opponent, bonus); // both players get the full bonus - separate economies, not a split pot
         updateGameUI();
     }
 
@@ -3011,7 +3038,7 @@ function gameLoop() {
     for (let i = gameState.enemies.length - 1; i >= 0; i--) {
         const e = gameState.enemies[i];
         if (e.hp <= 0) {
-            gameState.cash += e.reward;
+            addToWallet(e.lastDamagedBy || currentUsername, e.reward);
             playerData.questProgress.enemiesDefeated = (playerData.questProgress.enemiesDefeated || 0) + 1;
             if (e.type === "boss" || e.type === "boss2") {
                 playerData.questProgress.bossesDefeated = (playerData.questProgress.bossesDefeated || 0) + 1;
@@ -3055,7 +3082,7 @@ function gameLoop() {
 function broadcastCoopState() {
     if (!socket || !currentMatch || !currentMatch.isHost) return;
     const state = {
-        cash: gameState.cash, hp: gameState.hp, wave: gameState.wave,
+        playerCash: gameState.playerCash, hp: gameState.hp, wave: gameState.wave,
         waveActive: gameState.waveActive, waveTimer: gameState.waveTimer,
         gameMode: gameState.gameMode, mapId: currentMap.id,
         towers: gameState.towers.map(t => ({
@@ -3075,25 +3102,26 @@ function broadcastCoopState() {
 }
 
 function applyRemoteAction(action) {
-    if (!action) return;
+    if (!action || !currentMatch) return;
+    const guestName = currentMatch.opponent; // the only other participant on a 2-player shared board
     if (action.type === "placeTower") {
         const base = TOWER_DB[action.towerId];
         if (!base) return;
         const cost = base.levels[0].costCash;
-        if (gameState.cash >= cost) {
-            gameState.cash -= cost;
-            const tower = new Tower(action.towerId, action.x, action.y, currentMatch.opponent);
+        if (walletOf(guestName) >= cost) {
+            spendFromWallet(guestName, cost);
+            const tower = new Tower(action.towerId, action.x, action.y, guestName);
             tower.rotationY = action.rotationY || 0;
             gameState.towers.push(tower);
             updateGameUI();
         }
     } else if (action.type === "upgradeTower") {
         const t = gameState.towers.find(tw => tw.uid === action.uid);
-        if (t) t.upgrade();
+        if (t && t.owner === guestName) t.upgrade(); // only the tower's own owner can spend on it
     } else if (action.type === "sellTower") {
         const t = gameState.towers.find(tw => tw.uid === action.uid);
-        if (t) {
-            gameState.cash += Math.floor(t.stats.costCash * 0.5);
+        if (t && t.owner === guestName) {
+            addToWallet(guestName, Math.floor(t.stats.costCash * 0.5));
             gameState.towers = gameState.towers.filter(tw => tw !== t);
             if (gameState.selectedPlacedTower === t) gameState.selectedPlacedTower = null;
             document.getElementById("upgrade-panel").classList.add("hidden");
@@ -3139,7 +3167,7 @@ function guestFrame() {
 
     document.getElementById("game-hp").innerText = remoteState.hp;
     document.getElementById("game-wave").innerText = remoteState.wave;
-    document.getElementById("game-cash").innerText = remoteState.cash;
+    document.getElementById("game-cash").innerText = (remoteState.playerCash && remoteState.playerCash[currentUsername]) || 0;
     document.getElementById("wave-timer-ui").innerText = remoteState.waveActive ? "Wave in progress" : "Ready for next wave";
     document.getElementById("btn-start-wave").disabled = remoteState.waveActive;
 
@@ -3201,7 +3229,7 @@ function guestFrame() {
 function buildGuestMatchLoadout() {
     const bar = document.getElementById("match-loadout");
     bar.innerHTML = "";
-    const cash = remoteState ? remoteState.cash : 0;
+    const cash = (remoteState && remoteState.playerCash) ? (remoteState.playerCash[currentUsername] || 0) : 0;
     playerData.loadout.forEach(id => {
         const t = TOWER_DB[id] || GOLDEN_TOWERS[id];
         const cost = GOLDEN_TOWERS[id] ? TOWER_DB[GOLDEN_TOWERS[id].baseId].levels[0].costCash : t.levels[0].costCash;
@@ -3262,8 +3290,10 @@ function handleGuestPrimaryAction() {
 function showGuestUpgradePanel(t) {
     const base = TOWER_DB[t.typeId];
     const p = document.getElementById("upgrade-panel");
+    const isOwner = t.owner === currentUsername;
+    const myWallet = (remoteState && remoteState.playerCash) ? (remoteState.playerCash[currentUsername] || 0) : 0;
     p.classList.remove("hidden");
-    document.getElementById("upg-title").innerText = base.name + (t.owner !== currentUsername ? ` (${t.owner})` : "");
+    document.getElementById("upg-title").innerText = base.name + (isOwner ? "" : ` (${t.owner})`);
     document.getElementById("upg-level").innerText = t.level + 1;
     document.getElementById("upg-dmg").innerText = base.levels[t.level].damage ?? base.levels[t.level].income ?? "-";
     document.getElementById("upg-range").innerText = base.levels[t.level].range || 0;
@@ -3274,10 +3304,13 @@ function showGuestUpgradePanel(t) {
     };
 
     const upgBtn = document.getElementById("btn-upgrade");
-    if (t.level < base.levels.length - 1) {
+    if (!isOwner) {
+        document.getElementById("upg-cost").innerText = "-";
+        upgBtn.disabled = true;
+    } else if (t.level < base.levels.length - 1) {
         const next = base.levels[t.level + 1];
         document.getElementById("upg-cost").innerText = next.costCash;
-        upgBtn.disabled = !remoteState || remoteState.cash < next.costCash;
+        upgBtn.disabled = myWallet < next.costCash;
         upgBtn.onclick = () => {
             socket.emit("match:action", { toUsername: currentMatch.opponent, action: { type: "upgradeTower", uid: t.uid } });
         };
@@ -3286,8 +3319,11 @@ function showGuestUpgradePanel(t) {
         upgBtn.disabled = true;
     }
 
-    document.getElementById("upg-sell").innerText = Math.floor(base.levels[t.level].costCash * 0.5);
-    document.getElementById("btn-sell").onclick = () => {
+    const sellBtn = document.getElementById("btn-sell");
+    document.getElementById("upg-sell").innerText = isOwner ? Math.floor(base.levels[t.level].costCash * 0.5) : "-";
+    sellBtn.disabled = !isOwner;
+    sellBtn.onclick = () => {
+        if (!isOwner) return;
         socket.emit("match:action", { toUsername: currentMatch.opponent, action: { type: "sellTower", uid: t.uid } });
         p.classList.add("hidden");
         guestSelectedUid = null;
