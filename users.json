@@ -43,6 +43,51 @@
         "incoming": [],
         "outgoing": []
       }
+    },
+    {
+      "id": "1788821741794",
+      "username": "Ethan_me",
+      "email": "1234@gmail.com",
+      "password": "$2a$10$cCFVr/cE3lC/seM6/DcAauKQgIASS9UEhEyc9vznSGx7hHZClDfAu",
+      "createdAt": "2026-09-07T22:55:41.794Z",
+      "gameData": {
+        "level": 3,
+        "xp": 295,
+        "coins": 195,
+        "gems": 0,
+        "ownedTowers": [
+          "scout",
+          "sniper",
+          "militant"
+        ],
+        "goldenTowers": [],
+        "loadout": [
+          "scout",
+          "sniper"
+        ],
+        "dailyRewards": {
+          "lastClaimDate": "Tue Sep 08 2026",
+          "streak": 1,
+          "claimedToday": true
+        },
+        "quests": {
+          "active": [],
+          "completed": []
+        },
+        "questProgress": {
+          "matchesWon": 0,
+          "wavesReached": 22,
+          "enemiesDefeated": 660,
+          "bossesDefeated": 4,
+          "towersPlaced": 24,
+          "towersUpgraded": 3
+        }
+      },
+      "social": {
+        "friends": [],
+        "incoming": [],
+        "outgoing": []
+      }
     }
   ]
 }

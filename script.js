@@ -1,6 +1,5 @@
 // --- API CONFIGURATION ---
-const API_BASE = 'http://localhost:3000/api';
-let authToken = localStorage.getItem('authToken') || null;
+const API_BASE = 'https://tower-9ucq.onrender.com';let authToken = localStorage.getItem('authToken') || null;
 let currentUsername = localStorage.getItem('currentUsername') || null;
 
 // API Functions
