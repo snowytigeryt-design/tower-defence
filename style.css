@@ -7,6 +7,8 @@
     --dark: #2c3e50;
     --light: #ecf0f1;
     --gold: #ffd700;
+    --panel-bg: #262636;
+    --success: #2ecc71;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -174,6 +176,22 @@ button:disabled {
 .tower-card h3 { margin-bottom: 10px; font-size: 1.1em; }
 .tower-card p { font-size: 0.9em; margin-bottom: 5px; color: #bbb; }
 .tower-card button { width: 100%; margin-top: 10px; }
+
+.tower-card-header { display: flex; align-items: center; justify-content: center; gap: 8px; position: relative; }
+.tower-card-header h3 { margin-bottom: 0; }
+.info-dots-btn {
+    position: absolute; right: 0; top: -6px;
+    background: rgba(255,255,255,0.08); color: var(--light);
+    width: 26px; height: 26px; padding: 0; border-radius: 50%;
+    font-size: 1.1rem; line-height: 1; display: flex; align-items: center; justify-content: center;
+}
+.info-dots-btn:hover { background: rgba(255,255,255,0.2); transform: none; box-shadow: none; }
+.tower-info {
+    text-align: left; background: rgba(0,0,0,0.35); border: 1px solid #555;
+    border-radius: 6px; padding: 10px 12px; margin: 8px 0; font-size: 0.82rem;
+    color: #ddd; line-height: 1.6;
+}
+.tower-info.hidden { display: none; }
 
 /* Game UI */
 #game-ui { width: 100%; height: 80vh; min-height: 500px; position: relative; }

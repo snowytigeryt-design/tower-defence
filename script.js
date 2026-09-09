@@ -240,13 +240,13 @@ const TOWER_DB = {
         ]
     },
     trapper: {
-        id: "trapper", name: "Trapper", type: "slow", role: "Area Slow",
+        id: "trapper", name: "Trapper", type: "trap", role: "Proximity Trap",
         priceCoins: 400,
         color: "#8e44ad", radius: 14,
         levels: [
-            { costCash: 550, damage: 2, range: 80, cooldown: 2000, slowAmount: 0.4, slowDuration: 3000 },
-            { costCash: 950, damage: 3, range: 90, cooldown: 1800, slowAmount: 0.5, slowDuration: 3500 },
-            { costCash: 1900, damage: 5, range: 100, cooldown: 1600, slowAmount: 0.6, slowDuration: 4000 }
+            { costCash: 550, damage: 12, range: 55, cooldown: 1800, slowAmount: 0.4, slowDuration: 3000 },
+            { costCash: 950, damage: 24, range: 60, cooldown: 1500, slowAmount: 0.5, slowDuration: 3500 },
+            { costCash: 1900, damage: 45, range: 65, cooldown: 1200, slowAmount: 0.6, slowDuration: 4000 }
         ]
     },
     paintballer: {
@@ -975,13 +975,7 @@ function connectSocket() {
 
     // Guest receives authoritative board snapshots from the host
     socket.on("match:state", ({ state }) => {
-        if (currentMatch && !currentMatch.isHost) {
-            remoteState = state;
-            // Refresh the tower tray so affordability (cash >= cost) is checked against
-            // the latest wallet balance, not the stale $0 snapshot from before the first
-            // state arrived - that stale closure was why guests could never select a tower.
-            buildGuestMatchLoadout();
-        }
+        if (currentMatch && !currentMatch.isHost) remoteState = state;
     });
 
     // Host receives action requests from the guest and applies them to the real, shared gameState
@@ -1368,6 +1362,32 @@ function buildQuests() {
     });
 }
 
+// Turns a tower's raw level-1 stats into the kind of plain-English summary a shop
+// tooltip should show: damage, fire rate, range, and whatever special ability its
+// type grants (splash, chain, slow, burn, heal, income...).
+function describeTowerStats(tower) {
+    const s = tower.levels[0];
+    const lines = [];
+
+    if (s.damage !== undefined) lines.push(`Damage: ${s.damage}`);
+    if (s.cooldown !== undefined) lines.push(`Fire Rate: ${(1000 / s.cooldown).toFixed(2)}/sec`);
+    if (s.range) lines.push(`Range: ${s.range}`);
+
+    const abilityBits = [];
+    if (tower.type === "splash" && s.splash) abilityBits.push(`Splash radius ${s.splash}`);
+    if (tower.type === "chain" && s.chainCount) abilityBits.push(`Chains to ${s.chainCount} extra targets`);
+    if ((tower.type === "slow" || tower.type === "trap") && s.slowAmount) abilityBits.push(`Slows ${Math.round(s.slowAmount * 100)}% for ${(s.slowDuration / 1000).toFixed(1)}s`);
+    if (tower.type === "dot" && s.burnDamage) abilityBits.push(`Burns for ${s.burnDamage}/tick over ${(s.burnDuration / 1000).toFixed(1)}s`);
+    if (tower.type === "support" && s.healAmount) abilityBits.push(`Heals nearby towers ${s.healAmount}/tick`);
+    if (tower.type === "economy" && s.income) abilityBits.push(`Generates $${s.income} every ${(s.cooldown / 1000).toFixed(0)}s`);
+    if (tower.type === "trap") abilityBits.push("Triggers instantly on proximity - no travel time");
+    if (tower.type === "damage" && s.chargeRate) abilityBits.push("Charges up the longer it fires without pause");
+
+    lines.push(`Abilities: ${abilityBits.length ? abilityBits.join(", ") : "None"}`);
+    lines.push(`(Level 1 stats shown - all stats improve with in-match upgrades)`);
+    return lines.join("<br>");
+}
+
 function buildShop() {
     const container = document.getElementById("shop-container");
     container.innerHTML = "";
@@ -1384,15 +1404,24 @@ function buildShop() {
         div.className = "tower-card";
         const isOwned = playerData.ownedTowers.includes(tower.id);
         div.innerHTML = `
-            <h3>${tower.name}</h3>
+            <div class="tower-card-header">
+                <h3>${tower.name}</h3>
+                <button class="info-dots-btn" id="info-${tower.id}" title="Tower details">&#8942;</button>
+            </div>
             <p>${tower.role}</p>
             <p>Cost: <span class="coin-text">${tower.priceCoins} Coins</span></p>
+            <div class="tower-info hidden" id="info-panel-${tower.id}">${describeTowerStats(tower)}</div>
             <button ${isOwned ? "disabled" : ""} id="buy-${tower.id}">
                 ${isOwned ? "Owned" : "Purchase"}
             </button>
         `;
         container.appendChild(div);
-        
+
+        document.getElementById(`info-${tower.id}`).addEventListener("click", (e) => {
+            e.stopPropagation();
+            document.getElementById(`info-panel-${tower.id}`).classList.toggle("hidden");
+        });
+
         if (!isOwned) {
             document.getElementById(`buy-${tower.id}`).addEventListener("click", () => {
                 if (playerData.coins >= tower.priceCoins) {
@@ -1420,18 +1449,35 @@ function buildShop() {
         div.style.borderColor = "#ffd700";
         const isOwned = playerData.goldenTowers.includes(tower.id);
         const canUnlock = playerData.level >= tower.requiredLevel;
-        
+        const base = TOWER_DB[tower.baseId];
+        const modifiedStats = { ...base.levels[0] };
+        if (tower.statMultipliers) {
+            for (let key in tower.statMultipliers) {
+                if (modifiedStats[key] !== undefined) modifiedStats[key] *= tower.statMultipliers[key];
+            }
+        }
+        const syntheticTower = { type: base.type, levels: [modifiedStats] };
+
         div.innerHTML = `
-            <h3 style="color: #ffd700;">${tower.name}</h3>
+            <div class="tower-card-header">
+                <h3 style="color: #ffd700;">${tower.name}</h3>
+                <button class="info-dots-btn" id="info-${tower.id}" title="Tower details">&#8942;</button>
+            </div>
             <p>${tower.baseId.charAt(0).toUpperCase() + tower.baseId.slice(1)} Variant</p>
             <p>Requires Level: ${tower.requiredLevel}</p>
             <p>Cost: <span class="gem-text">${tower.priceGems} Gems</span></p>
+            <div class="tower-info hidden" id="info-panel-${tower.id}">${describeTowerStats(syntheticTower)}</div>
             <button ${isOwned ? "disabled" : !canUnlock ? "disabled" : ""} id="buy-${tower.id}">
                 ${isOwned ? "Owned" : !canUnlock ? `Lvl ${tower.requiredLevel} Required` : "Purchase"}
             </button>
         `;
         container.appendChild(div);
-        
+
+        document.getElementById(`info-${tower.id}`).addEventListener("click", (e) => {
+            e.stopPropagation();
+            document.getElementById(`info-panel-${tower.id}`).classList.toggle("hidden");
+        });
+
         if (!isOwned && canUnlock) {
             document.getElementById(`buy-${tower.id}`).addEventListener("click", () => {
                 if (playerData.gems >= tower.priceGems) {
@@ -1596,28 +1642,28 @@ let path = currentMap.path;
 const GAME_MODES = {
     normal: {
         id: "normal", name: "Normal", description: "Standard gameplay",
-        enemyHpMult: 1.0, enemySpeedMult: 1.0, cashMult: 1.0, xpMult: 1.0, coinMult: 1.0,
+        enemyHpMult: 1.0, enemySpeedMult: 1.0, spawnCountMult: 1.0, bossHpMult: 1.0, cashMult: 1.0, xpMult: 1.0, coinMult: 1.0,
         startingCash: 500, startingHp: 100
     },
     molten: {
-        id: "molten", name: "Molten", description: "Enemies have increased speed and HP",
-        enemyHpMult: 1.5, enemySpeedMult: 1.3, cashMult: 1.5, xpMult: 1.5, coinMult: 1.5,
-        startingCash: 600, startingHp: 80
-    },
-    fallen: {
-        id: "fallen", name: "Fallen", description: "More enemies, stronger bosses",
-        enemyHpMult: 1.2, enemySpeedMult: 1.1, cashMult: 1.3, xpMult: 1.3, coinMult: 1.3,
+        id: "molten", name: "Molten", description: "Enemies are much faster and hit harder for the money",
+        enemyHpMult: 1.4, enemySpeedMult: 1.6, spawnCountMult: 1.0, bossHpMult: 1.3, cashMult: 1.1, xpMult: 1.5, coinMult: 1.5,
         startingCash: 550, startingHp: 90
     },
+    fallen: {
+        id: "fallen", name: "Fallen", description: "More enemies per wave and much stronger bosses",
+        enemyHpMult: 1.3, enemySpeedMult: 1.15, spawnCountMult: 1.4, bossHpMult: 1.8, cashMult: 1.15, xpMult: 1.3, coinMult: 1.3,
+        startingCash: 520, startingHp: 90
+    },
     hardcore: {
-        id: "hardcore", name: "Hardcore", description: "One life, no second chances",
-        enemyHpMult: 2.0, enemySpeedMult: 1.5, cashMult: 2.0, xpMult: 2.0, coinMult: 2.0,
-        startingCash: 700, startingHp: 1
+        id: "hardcore", name: "Hardcore", description: "One life, tough enemies, and your income doesn't scale up to match",
+        enemyHpMult: 2.2, enemySpeedMult: 1.4, spawnCountMult: 1.1, bossHpMult: 1.5, cashMult: 1.0, xpMult: 2.0, coinMult: 2.0,
+        startingCash: 600, startingHp: 1
     },
     challenge: {
-        id: "challenge", name: "Challenge", description: "Special enemy compositions",
-        enemyHpMult: 1.8, enemySpeedMult: 1.2, cashMult: 1.8, xpMult: 1.8, coinMult: 1.8,
-        startingCash: 650, startingHp: 75
+        id: "challenge", name: "Challenge", description: "Special enemy compositions and a much larger economy squeeze",
+        enemyHpMult: 1.6, enemySpeedMult: 1.25, spawnCountMult: 1.5, bossHpMult: 1.4, cashMult: 1.1, xpMult: 1.8, coinMult: 1.8,
+        startingCash: 600, startingHp: 75
     }
 };
 
@@ -1690,6 +1736,14 @@ class Enemy {
         // Co-op matches are tougher: double enemy health when playing with a friend on a shared board
         if (currentMatch) {
             this.hp *= 2;
+        }
+
+        // Harder modes hit bosses with extra HP on top of the normal wave scaling, so a
+        // boss on Hardcore/Fallen is a genuinely different fight, not just a bigger number
+        // that your existing income scales past.
+        if (this.isBoss) {
+            const mode = GAME_MODES[gameState.gameMode];
+            this.hp *= (mode.bossHpMult || 1);
         }
 
         this.maxHp = this.hp;
@@ -1856,6 +1910,23 @@ class Tower {
             return;
         }
 
+        if (this.baseData.type === "trap") {
+            // Traps don't shoot - they instantly spring on whatever wanders into range,
+            // on a per-trap reset cooldown. No projectile travel time.
+            if (gameState.frames - this.lastAttack > (this.stats.cooldown / 16.66)) {
+                let target = this.findTarget();
+                if (target) {
+                    target.takeDamage(this.stats.damage, "trap");
+                    target.lastDamagedBy = this.owner;
+                    if (this.stats.slowAmount && this.stats.slowDuration) {
+                        target.applySlow(this.stats.slowAmount, this.stats.slowDuration);
+                    }
+                    this.lastAttack = gameState.frames;
+                }
+            }
+            return;
+        }
+
         if (this.baseData.type === "damage" && this.stats.chargeRate) {
             this.charge = Math.min(1, this.charge + this.stats.chargeRate);
         }
@@ -2018,10 +2089,7 @@ function generateWave() {
     const mode = GAME_MODES[gameState.gameMode];
     const waveMult = 1 + (gameState.wave * 0.2) * mode.enemyHpMult;
     let count = 5 + gameState.wave * 2;
-
-    if (gameState.gameMode === "challenge") {
-        count = Math.floor(count * 1.5);
-    }
+    count = Math.floor(count * (mode.spawnCountMult || 1));
 
     spawnQueue = [];
 
@@ -2046,6 +2114,11 @@ function generateWave() {
     }
     gameState.waveActive = true;
     gameState.waveTimer = 180;
+    // Reset the spawn clock relative to THIS match's frame counter - previously this was
+    // never reset between matches, so a leftover value from a prior game could make the
+    // "> 60 frames since last spawn" check stay false for a long time, silently stalling
+    // the wave (looked like "Start Wave doesn't work").
+    spawnTimer = gameState.frames;
 }
 
 // ============================================================================
@@ -2273,6 +2346,9 @@ function initThreeScene() {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
     container.appendChild(renderer.domElement);
 
     const hemi = new THREE.HemisphereLight(0xffffff, 0x33361f, 0.7);
@@ -2285,6 +2361,11 @@ function initThreeScene() {
     sun.shadow.camera.top = 420; sun.shadow.camera.bottom = -420;
     sun.shadow.camera.far = 900;
     scene.add(sun);
+    // Soft cool fill light from the opposite side, no shadows - takes the flat, single-source
+    // look off the models without doubling the shadow cost.
+    const fill = new THREE.DirectionalLight(0x88aaff, 0.35);
+    fill.position.set(-160, 140, -140);
+    scene.add(fill);
 
     raycaster = new THREE.Raycaster();
     clock = new THREE.Clock();
@@ -2344,7 +2425,7 @@ function initThreeScene() {
         if (crosshair) crosshair.style.display = document.pointerLockElement === renderer.domElement ? "block" : "none";
     });
 
-    renderer.domElement.addEventListener("click", () => handlePrimaryAction());
+    renderer.domElement.addEventListener("click", (e) => handlePrimaryAction(e));
 
     renderer.domElement.addEventListener("wheel", (e) => {
         cameraRig.distance = Math.max(30, Math.min(160, cameraRig.distance + e.deltaY * 0.08));
@@ -2485,6 +2566,20 @@ function buildTowerGroup(baseData, level, isGolden) {
         const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(4 + tier * 1.3, 0), new THREE.MeshStandardMaterial({ color: "#a8e0ff", transparent: true, opacity: 0.85, emissive: "#3498db", emissiveIntensity: 0.3 }));
         crystal.position.set(0, 12, barrelLength * 0.4);
         turretPivot.add(crystal);
+    } else if (type === "trap") {
+        // Traps don't aim and have no barrel - a low spiked plate set into the ground.
+        const plate = new THREE.Mesh(new THREE.CylinderGeometry(8 + tier * 1.5, 8 + tier * 1.5, 2, 12), turretMat);
+        plate.position.y = 1;
+        turretPivot.add(plate);
+        const spikeCount = 5 + tier * 2;
+        for (let i = 0; i < spikeCount; i++) {
+            const spikeH = 5 + tier * 1.5;
+            const spike = new THREE.Mesh(new THREE.ConeGeometry(1 + tier * 0.2, spikeH, 6), turretMat);
+            const angle = (i / spikeCount) * Math.PI * 2;
+            const r = 5 + tier;
+            spike.position.set(Math.cos(angle) * r, 2 + spikeH / 2, Math.sin(angle) * r);
+            turretPivot.add(spike);
+        }
     } else if (type === "economy") {
         const chest = new THREE.Mesh(new THREE.BoxGeometry(11, 8, 9), turretMat);
         chest.position.y = 4;
@@ -2564,6 +2659,13 @@ function syncTowers() {
             const dz = worldZ(target.y) - entry.group.position.z;
             const desiredYaw = Math.atan2(dx, dz) - tower.rotationY;
             entry.turretPivot.rotation.y = desiredYaw;
+        }
+        if (tower.baseData.type === "trap") {
+            if (entry.lastAttackSeen === undefined) entry.lastAttackSeen = tower.lastAttack;
+            if (tower.lastAttack !== entry.lastAttackSeen) {
+                entry.lastAttackSeen = tower.lastAttack;
+                spawnImpactEffect(tower.x, tower.y, (tower.stats.range || 40) * 0.5, "#8e44ad");
+            }
         }
     }
     for (const [uid, entry] of towerMeshes) {
@@ -2864,7 +2966,19 @@ function tryInteractClick() {
     }
 }
 
-function handlePrimaryAction() {
+function handlePrimaryAction(e) {
+    // Always sync to the exact click position first (unless the mouse is pointer-locked,
+    // in which case we always aim from the crosshair at screen center). Previously this
+    // relied entirely on whatever the last "mousemove" event had recorded, which could be
+    // stale right after switching focus from a UI button to the 3D view - that's why
+    // placing a tower sometimes took several clicks before one "took".
+    if (e && document.pointerLockElement !== renderer.domElement) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        mouseNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        mouseNDC.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+    }
+    if (placement.active) updatePlacementPreview();
+
     if (currentMatch && !currentMatch.isHost) {
         handleGuestPrimaryAction();
         return;
@@ -2973,6 +3087,8 @@ document.getElementById("btn-close-panel").onclick = () => {
 function startGame() {
     const mode = GAME_MODES[gameState.gameMode];
     nextTowerUid = 1;
+    spawnQueue = [];
+    spawnTimer = 0;
     gameState = {
         running: true,
         playerCash: {}, // per-player wallets - co-op does NOT share a cash pool
@@ -3001,7 +3117,7 @@ function startGame() {
 }
 
 function startNextWave() {
-    if (!gameState.running || gameState.waveActive) return;
+    if (!gameState.running || gameState.waveActive || gameState.wave > 30) return;
     generateWave();
     updateGameUI();
     if (currentMatch) sendMatchEvent({ type: "wave", wave: gameState.wave });
@@ -3038,11 +3154,16 @@ function gameLoop() {
         }
     } else if (gameState.waveActive && gameState.enemies.length === 0) {
         gameState.waveActive = false;
-        gameState.wave++;
-        const bonus = 100 + (gameState.wave * 20);
-        addToWallet(currentUsername, bonus);
-        if (currentMatch) addToWallet(currentMatch.opponent, bonus); // both players get the full bonus - separate economies, not a split pot
-        updateGameUI();
+        if (gameState.wave >= 30) {
+            gameState.wave++; // so the "waves cleared" stat (wave - 1) correctly reads 30
+            endGame(true);
+        } else {
+            gameState.wave++;
+            const bonus = 100 + (gameState.wave * 20);
+            addToWallet(currentUsername, bonus);
+            if (currentMatch) addToWallet(currentMatch.opponent, bonus); // both players get the full bonus - separate economies, not a split pot
+            updateGameUI();
+        }
     }
 
     gameState.towers.forEach(t => t.update());
@@ -3181,6 +3302,7 @@ function guestFrame() {
     document.getElementById("game-cash").innerText = (remoteState.playerCash && remoteState.playerCash[currentUsername]) || 0;
     document.getElementById("wave-timer-ui").innerText = remoteState.waveActive ? "Wave in progress" : "Ready for next wave";
     document.getElementById("btn-start-wave").disabled = remoteState.waveActive;
+    refreshGuestLoadoutVisuals();
 
     const seenT = new Set();
     remoteState.towers.forEach((t, i) => {
@@ -3237,28 +3359,53 @@ function guestFrame() {
     }
 }
 
+// Live wallet lookup for the guest - always reads the latest synced state,
+// never a value captured earlier. This is what the placement UI checks against.
+function guestCash() {
+    return (remoteState && remoteState.playerCash) ? (remoteState.playerCash[currentUsername] || 0) : 0;
+}
+
+// Built ONCE per match (see startGuestMatch) - the buttons themselves never get
+// torn down and recreated while a match is running. Only their visual state
+// (disabled/selected classes) is refreshed reactively, every frame, from live data.
 function buildGuestMatchLoadout() {
     const bar = document.getElementById("match-loadout");
     bar.innerHTML = "";
-    const cash = (remoteState && remoteState.playerCash) ? (remoteState.playerCash[currentUsername] || 0) : 0;
     playerData.loadout.forEach(id => {
         const t = TOWER_DB[id] || GOLDEN_TOWERS[id];
         const cost = GOLDEN_TOWERS[id] ? TOWER_DB[GOLDEN_TOWERS[id].baseId].levels[0].costCash : t.levels[0].costCash;
 
         const btn = document.createElement("div");
-        btn.className = `match-tower-btn ${cash < cost ? "disabled" : ""}`;
-        if (guestSelectedTowerToPlace === id) btn.classList.add("selected");
+        btn.className = "match-tower-btn";
+        btn.dataset.towerId = id;
         if (GOLDEN_TOWERS[id]) btn.style.borderColor = "#ffd700";
-
         btn.innerHTML = `<strong>${t.name}</strong><span>$${cost}</span>`;
-        btn.onclick = () => {
-            if (cash >= cost) {
-                if (guestSelectedTowerToPlace === id) { guestSelectedTowerToPlace = null; exitPlacementMode(); }
-                else { guestSelectedTowerToPlace = id; enterPlacementMode(id); }
-                buildGuestMatchLoadout();
-            }
-        };
+
+        // Cash is checked live, right here, at the moment of the click - never from
+        // a value that was frozen when the button was drawn.
+        btn.addEventListener("click", () => {
+            if (guestCash() < cost) return;
+            if (guestSelectedTowerToPlace === id) { guestSelectedTowerToPlace = null; exitPlacementMode(); }
+            else { guestSelectedTowerToPlace = id; enterPlacementMode(id); }
+            refreshGuestLoadoutVisuals();
+        });
+
         bar.appendChild(btn);
+    });
+    refreshGuestLoadoutVisuals();
+}
+
+// Cheap per-frame visual refresh - toggles classes on the existing buttons instead
+// of destroying and recreating them, so a click can never land on a stale/removed node.
+function refreshGuestLoadoutVisuals() {
+    const bar = document.getElementById("match-loadout");
+    const cash = guestCash();
+    bar.querySelectorAll(".match-tower-btn").forEach(btn => {
+        const id = btn.dataset.towerId;
+        const t = TOWER_DB[id] || GOLDEN_TOWERS[id];
+        const cost = GOLDEN_TOWERS[id] ? TOWER_DB[GOLDEN_TOWERS[id].baseId].levels[0].costCash : t.levels[0].costCash;
+        btn.classList.toggle("disabled", cash < cost);
+        btn.classList.toggle("selected", guestSelectedTowerToPlace === id);
     });
 }
 
@@ -3273,7 +3420,7 @@ function handleGuestPrimaryAction() {
         });
         guestSelectedTowerToPlace = null;
         exitPlacementMode();
-        buildGuestMatchLoadout();
+        refreshGuestLoadoutVisuals();
         return;
     }
 
@@ -3356,8 +3503,11 @@ function endGame(victory) {
     playerData.questProgress.wavesReached = Math.max(playerData.questProgress.wavesReached || 0, gameState.wave - 1);
 
     document.getElementById("game-over-overlay").classList.remove("hidden");
-    document.getElementById("end-title").innerText = victory ? "VICTORY!" : "GAME OVER";
-    document.getElementById("end-stats").innerHTML = `Waves Cleared: ${gameState.wave - 1}<br>Coins Earned: <span class="coin-text">+${coinsEarned}</span><br>XP Earned: +${xpEarned}`;
+    const fullClear = victory && gameState.wave - 1 >= 30;
+    document.getElementById("end-title").innerText = fullClear ? "YOU WIN!" : (victory ? "VICTORY!" : "GAME OVER");
+    document.getElementById("end-stats").innerHTML = fullClear
+        ? `All 30 waves cleared - you beat the game!<br>Coins Earned: <span class="coin-text">+${coinsEarned}</span><br>XP Earned: +${xpEarned}`
+        : `Waves Cleared: ${gameState.wave - 1}<br>Coins Earned: <span class="coin-text">+${coinsEarned}</span><br>XP Earned: +${xpEarned}`;
 
     playerData.coins += coinsEarned;
     addXP(xpEarned);
